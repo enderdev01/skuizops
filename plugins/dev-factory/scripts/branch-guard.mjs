@@ -8,8 +8,7 @@
 //   node branch-guard.mjs pre-push     git pre-push hook, reads "<local ref> <sha> <remote ref> <sha>" lines
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-import { inScope, projectDir } from "./scope.mjs";
+import { inScope, isMain, projectDir } from "./scope.mjs";
 
 export const PROTECTED = ["develop", "desarrollo", "desa", "main", "master", "production", "prod", "test", "release"];
 export const WORK_PREFIXES = ["feat/", "fix/", "hotfix/"];
@@ -122,4 +121,4 @@ function main(mode) {
   fail(`unknown mode "${mode}". Use: claude | pre-commit | pre-push`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main(process.argv[2]);
+if (isMain(import.meta.url)) main(process.argv[2]);

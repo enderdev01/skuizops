@@ -64,3 +64,21 @@ describe("checkCommand bypass regressions", () => {
     assert.equal(checkCommand("git -c user.name=t commit -m x", onFeat), null));
   it("does not treat merge -n (no-stat) as no-verify", () => assert.equal(checkCommand("git merge -n main", onFeat), null));
 });
+
+// Regression: the entry point compared paths without resolving symlinks, so the guard
+// silently did nothing (failed open) when invoked through a symlinked path.
+describe("entry point through a symlinked path", () => {
+  it("still blocks a commit on main", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const { mkdtempSync, symlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const base = mkdtempSync(join(tmpdir(), "guard-link-"));
+    symlinkSync(dirname(fileURLToPath(import.meta.url)), join(base, "link"));
+    const repo = mkdtempSync(join(tmpdir(), "guard-repo-"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+    const r = spawnSync("node", [join(base, "link", "branch-guard.mjs"), "pre-commit"], { cwd: repo, input: "", encoding: "utf8" });
+    assert.equal(r.status, 2, r.stderr);
+  });
+});
