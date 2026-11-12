@@ -78,6 +78,9 @@ describe("checkCommand: hook-skipping and ref-moving forms", () => {
   blocked("git status & git commit -m x", "main");
   blocked("git status $(git commit -m x)", "main");
   allowed('git commit -m "git push origin main"');
+  allowed("git push -u origin feat/login 2>&1 | tail -3");
+  allowed("git push origin feat/login > push.log");
+  blocked("git push origin main 2>&1");
 
   blocked("git rebase feat/login", "main");
   blocked("git am patch.mbox", "main");

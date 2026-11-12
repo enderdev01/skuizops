@@ -60,7 +60,8 @@ export function checkCommand(command, currentBranch) {
 
   // Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
   // each segment is inspected, so the text of a commit message is not read as a second command.
-  for (const segment of command.replace(/["']/g, " ").split(/[;&|\n()`]+/)) {
+  // Redirections are removed first: `2>&1` and `> file` are not refspecs.
+  for (const segment of command.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/)) {
     const words = segment.trim().split(/\s+/);
     const gitAt = words.findIndex((w) => w === "git" || w.endsWith("/git"));
     if (gitAt === -1) continue;
