@@ -30,8 +30,26 @@ function report(ok, data, text) {
   process.exit(ok ? 0 : 1);
 }
 
+// The Node major the project pins (.nvmrc, .node-version or package.json engines.node), or null.
+// Returns { file, min, exact }: `exact` for a fixed major ("24", "v24.1", "^24", "24.x"), `min` for ">=24".
+function nodePin() {
+  for (const file of [".nvmrc", ".node-version"]) {
+    const major = existsSync(join(root, file)) && readFileSync(join(root, file), "utf8").trim().match(/^v?(\d+)/)?.[1];
+    if (major) return { file, exact: Number(major) };
+  }
+  let range = "";
+  try {
+    range = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).engines?.node ?? "";
+  } catch {}
+  const min = range.match(/^>=\s*v?(\d+)/)?.[1];
+  if (min) return { file: "package.json engines.node", min: Number(min) };
+  const exact = range.match(/^[\^~]?v?(\d+)(\.[\dx*]+)*$/)?.[1];
+  return exact ? { file: "package.json engines.node", exact: Number(exact) } : null;
+}
+
 async function doctor() {
   const [major, minor] = process.versions.node.split(".").map(Number);
+  const pin = nodePin();
   const hooksPath = run("git", ["config", "--get", "core.hooksPath"]);
   const branch = run("git", ["symbolic-ref", "--short", "-q", "HEAD"]);
   const isRepo = run("git", ["rev-parse", "--is-inside-work-tree"]).ok;
@@ -46,6 +64,13 @@ async function doctor() {
 
   const checks = [
     { name: "node", ok: major > 22 || (major === 22 && minor >= 18), fix: "Install Node 22.18+" },
+    ...(pin
+      ? [{
+          name: `node matches project pin (${pin.file})`,
+          ok: pin.exact ? major === pin.exact : major >= pin.min,
+          fix: `the project pins Node ${pin.exact ?? `>=${pin.min}`} but this shell runs ${process.versions.node}. Switch with: nvm use (or fnm use)`,
+        }]
+      : []),
     ...(existsSync(join(root, "package.json"))
       ? [{ name: "dependencies", ok: existsSync(join(root, "node_modules")), fix: "npm install" }]
       : []),

@@ -35,8 +35,20 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 5. **Make lemon the orchestrator of this project.** In `.claude/settings.json`, set `"agent": "dev-factory:lemon"`. Read the file first and merge: keep every existing key, create the file only if it is missing. New sessions in this project then run as lemon, which delegates to kiwi, fig, mango and cherry on its own.
 
-6. **Make it green.** Run `node scripts/control.mjs doctor`, then `node scripts/control.mjs verify`. Fix every failure and repeat until both exit 0.
+   **Make sure git tracks it.** The feature map is the project's memory, so it must be committed. Run `git check-ignore -v .claude/settings.json .claude/verification/features/README.md`. If either is ignored (often `.claude/` is ignored as a whole), add these lines to `.gitignore`, after the ignoring rule:
+   ```
+   !.claude/settings.json
+   !.claude/verification/
+   ```
+   Keep `.claude/settings.local.json` ignored. If the ignoring rule is `.claude/` with a trailing slash, git cannot re-include files under it: change it to `.claude/*` first. Re-run `git check-ignore` until neither path is ignored.
+
+6. **Make it green, without touching the app.**
+   - Run `node scripts/control.mjs doctor`, then `node scripts/control.mjs verify`.
+   - Fix failures caused by this setup: the files you created, `package.json` scripts you added, hooks and config.
+   - Fix environment problems `doctor` reports (for example a Node version that does not match the project's pin) by changing the environment, not the code: run `nvm use`, or tell the human.
+   - Do **not** change application source, tests or their config to make a failure that existed before the setup go away. To check whether a failure is pre-existing, run the same command in a clean checkout of `HEAD`: `d=$(mktemp -d) && git worktree add --detach "$d" HEAD`, install dependencies there, run it, then `git worktree remove --force "$d"`. If it fails there too, it is pre-existing. List each one in the report (command, test or rule, first error line) and leave it for the human.
+   - Repeat until `doctor` passes and `verify` fails only on the listed pre-existing failures.
 
 7. **Document it.** Add the `doctor` and `verify` commands and the branch policy to the project's AGENTS.md, and point to the feature map.
 
-Report: files created, the observed output of `doctor` and `verify`, and the number of features catalogued.
+Report: files created or changed (including `.gitignore`), the observed output of `doctor` and `verify`, the number of features catalogued, and the pre-existing failures you left untouched.
