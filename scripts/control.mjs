@@ -99,6 +99,8 @@ const BENCH_CASES = [
   ["path-guard.mjs", "bash", bash("echo done > notes.txt"), false],
   ["path-guard.mjs", "", edit(".githooks/pre-commit"), true],
   ["path-guard.mjs", "", edit("src/app.js"), false],
+  ["background-guard.mjs", "", { agent_id: "kiwi", tool_input: { command: "npm run dev", run_in_background: true } }, true],
+  ["background-guard.mjs", "", { tool_input: { command: "npm run dev", run_in_background: true } }, false],
   ["attribution-guard.mjs", "", "feat: add login\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n", true],
   ["attribution-guard.mjs", "", "feat: add login\n", false],
 ];
