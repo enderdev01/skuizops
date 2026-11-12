@@ -14,7 +14,7 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 | `cherry` | Opus | Inspector: independently verifies a change, with evidence |
 
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
-Hooks: branch guard on Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
+Hooks: branch guard on Bash, a protected-files guard on Edit and Write, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
 ## What you see
 
@@ -32,7 +32,17 @@ The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentSta
 
 ## Scope
 
-The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. Change it with `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives.
+The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. Change it with `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives. They run the guard installed with the plugin, and fall back to the project's `scripts/guard/` copy for contributors without it.
+
+### Trust and protected files
+
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash the block is best effort, like the rest of the Bash guard. A trusted folder also trusts every project nested inside it. To trust a project, run this yourself from its root:
+
+```bash
+mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
+```
+
+Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. Case variants and symlinks are resolved first. You change those files by hand. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
 
 ## Branch policy
 

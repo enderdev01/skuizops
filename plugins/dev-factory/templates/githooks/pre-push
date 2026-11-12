@@ -1,2 +1,10 @@
 #!/bin/sh
-exec node "$(git rev-parse --show-toplevel)/scripts/guard/branch-guard.mjs" pre-push
+# Prefer the guard installed with the dev-factory plugin (newest version that ships it): a branch cannot change it,
+# and plugin updates reach it. Otherwise, e.g. contributors without the plugin, use the copy in scripts/guard/.
+cache="$HOME/.claude/plugins/cache/factory-marketplace/dev-factory"
+guard=""
+for v in $(ls "$cache" 2>/dev/null | sort -V -r); do
+  [ -f "$cache/$v/scripts/branch-guard.mjs" ] && guard="$cache/$v/scripts" && break
+done
+[ -n "$guard" ] || guard="$(git rev-parse --show-toplevel)/scripts/guard"
+exec node "$guard/branch-guard.mjs" pre-push

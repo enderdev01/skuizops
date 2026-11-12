@@ -2,7 +2,7 @@
 // Exit 2 blocks the stop and feeds the failure back to the agent.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { inScope, projectDir } from "./scope.mjs";
+import { inScope, isTrusted, projectDir, trustHint } from "./scope.mjs";
 import { join } from "node:path";
 
 const input = JSON.parse(readFileSync(0, "utf8") || "{}");
@@ -28,6 +28,13 @@ else {
   if (scripts.verify) command = ["npm", ["run", "verify", "--silent"]];
 }
 if (!command) process.exit(0);
+// The command is the project's own code: run it only for projects the human trusted.
+if (!isTrusted(cwd)) {
+  process.stdout.write(
+    `${JSON.stringify({ systemMessage: `dev-factory: verify skipped, this project is not trusted. To trust it, run yourself: ${trustHint(cwd)}` })}\n`,
+  );
+  process.exit(0);
+}
 
 const result = spawnSync(command[0], command[1], { cwd, encoding: "utf8" });
 if (result.status === 0) process.exit(0);

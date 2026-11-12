@@ -82,3 +82,11 @@ describe("entry point through a symlinked path", () => {
     assert.equal(r.status, 2, r.stderr);
   });
 });
+
+describe("checkCommand: trust list", () => {
+  it("blocks agents from writing the trust list", () =>
+    assert.match(checkCommand('echo "$PWD" >> ~/.config/dev-factory/trusted-projects', "feat/x"), /Only the human/));
+  for (const cmd of ["echo /x >> ~/.config/dev-factory/trusted-proj*", "cd ~/.config/dev-factory && echo /x >> list", "ln -s ~/.config//Dev-Factory t"]) {
+    it(`blocks a variant: ${cmd}`, () => assert.ok(checkCommand(cmd, "feat/x")));
+  }
+});

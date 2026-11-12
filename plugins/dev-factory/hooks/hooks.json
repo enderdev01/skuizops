@@ -12,6 +12,18 @@
             "statusMessage": "Checking branch policy"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/path-guard.mjs\"",
+            "timeout": 10,
+            "onFailure": "block",
+            "statusMessage": "Checking protected files"
+          }
+        ]
       }
     ],
     "PostToolUse": [
