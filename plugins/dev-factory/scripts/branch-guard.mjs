@@ -50,26 +50,45 @@ function parseGit(words) {
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
 export function checkCommand(command, currentBranch) {
   if (!/\bgit\b/.test(command)) return null;
-  if (/--no-verify\b/.test(command)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
+  // git accepts any unambiguous prefix of a long option, so `--no-verif` is `--no-verify`.
+  if (/(^|[\s"'])--no-v/.test(command)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
+  // An included config file can set core.hooksPath without naming it here.
+  if (/\binclude\.path\b|\bincludeif\./i.test(command)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
   const withoutSetup = command.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
 
-  // Quotes and parentheses are dropped so `bash -c 'git commit'` is inspected like `git commit`.
-  for (const segment of command.replace(/["'()`]/g, " ").split(/&&|\|\||;|\|/)) {
+  // Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
+  // each segment is inspected, so the text of a commit message is not read as a second command.
+  for (const segment of command.replace(/["']/g, " ").split(/[;&|\n()`]+/)) {
     const words = segment.trim().split(/\s+/);
     const gitAt = words.findIndex((w) => w === "git" || w.endsWith("/git"));
     if (gitAt === -1) continue;
+    // These decide which hooks, config and git binary run. GIT_EDITOR, GIT_PAGER and the like are fine.
+    if (words.slice(0, gitAt).some((w) => /^(HOME|PATH|GIT_DIR|GIT_EXEC_PATH|GIT_CONFIG\w*)=/.test(w))) {
+      return "Setting HOME, PATH, GIT_DIR, GIT_EXEC_PATH or GIT_CONFIG* for a git command is forbidden: it changes which hooks and config git uses.";
+    }
     const { sub, rest } = parseGit(words.slice(gitAt + 1));
     const args = [sub, ...rest.filter((w) => !w.startsWith("-"))];
 
     if (sub === "commit" && rest.some((w) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))) {
       return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
     }
-    if (["commit", "merge", "cherry-pick", "revert"].includes(sub)) {
+    if (["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset"].includes(sub)) {
       const problem = commitViolation(currentBranch);
       if (problem) return `git ${sub} blocked: ${problem}`;
     }
+    // Plumbing and forced branch moves change a ref without running any hook.
+    if (sub === "update-ref" || sub === "commit-tree") return `git ${sub} is forbidden: it moves refs without running the git hooks.`;
+    const deletes = sub === "branch" && rest.some((w) => /^(-[a-zA-Z]*[dD][a-zA-Z]*|--delete)$/.test(w));
+    const forces =
+      (sub === "branch" && rest.some((w) => /^(-[a-zA-Z]*[fM][a-zA-Z]*|--force)$/.test(w))) ||
+      (sub === "checkout" && rest.includes("-B")) ||
+      (sub === "switch" && rest.some((w) => w === "-C" || w === "--force-create"));
+    // A delete names every branch it removes; a forced move names the branch first, then its start point.
+    const operands = args.slice(1);
+    const moved = deletes ? operands.find(isProtected) : forces && isProtected(operands[0] ?? "") ? operands[0] : null;
+    if (moved) return `git ${sub} blocked: "${moved}" is a protected branch and cannot be moved, reset or deleted here.`;
     if (sub === "push") {
       if (/\s--(all|mirror)\b/.test(segment)) return "git push --all/--mirror is forbidden.";
       const refspecs = args.slice(2); // after "push <remote>"
