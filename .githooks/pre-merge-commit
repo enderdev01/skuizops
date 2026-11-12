@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node "$(git rev-parse --show-toplevel)/plugins/dev-factory/scripts/branch-guard.mjs" pre-commit
