@@ -17,7 +17,7 @@ Hooks: branch guard on Bash, ESLint on edited files (when the project has it), a
 
 ## Branch policy
 
-Commit only on `feat/`, `fix/` or `hotfix/` branches. Never commit or push to `develop`, `desarrollo`, `desa`, `main`, `master`, `production`, `prod`, `test` or `release` (or anything under them). `--no-verify` and `core.hooksPath` changes are blocked; the only allowed form is `git config core.hooksPath .githooks`.
+Commit only on `feat/`, `fix/` or `hotfix/` branches. Never commit or push to `develop`, `desarrollo`, `desa`, `main`, `master`, `production`, `prod`, `test` or `release` (or anything under them). `--no-verify` (and its short form `git commit -n`) and `core.hooksPath` changes are blocked; the only allowed form is `git config core.hooksPath .githooks`.
 
 ## Install
 

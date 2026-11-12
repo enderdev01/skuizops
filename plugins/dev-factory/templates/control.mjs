@@ -63,9 +63,11 @@ function verify() {
   try {
     scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
   } catch {}
-  const names = ["typecheck", "lint", "test"].filter((name) => scripts[name]);
+  const found = ["typecheck", "lint", "test"].filter((name) => scripts[name]);
+  // Fall back to a project-defined "verify" script when the standard ones are absent.
+  const names = found.length ? found : scripts.verify ? ["verify"] : [];
   if (names.length === 0) {
-    report(false, { error: "no typecheck, lint or test script" }, "FAIL no typecheck, lint or test script in package.json  ->  add at least one, then re-run verify");
+    report(false, { error: "no typecheck, lint, test or verify script" }, "FAIL no typecheck, lint, test or verify script in package.json  ->  add at least one, then re-run verify");
   }
   const steps = names.map((step) => ({ step, ...run("npm", ["run", step, "--silent"]) }));
   const ok = steps.every((s) => s.ok);
@@ -85,7 +87,8 @@ function verify() {
 // ...and in the dispatch: else if (command === "greet") greet(rest);
 // Also add the command to HELP and a row to .claude/verification/features/README.md.
 
-const [command] = args;
+// eslint-disable-next-line no-unused-vars -- `rest` is used by feature commands added below.
+const [command, ...rest] = args;
 if (command === "doctor") await doctor();
 else if (command === "verify") verify();
 else {

@@ -49,3 +49,18 @@ describe("checkCommand", () => {
   it("blocks merge while on develop", () => assert.match(checkCommand("git merge feat/login", "develop"), /blocked/));
   it("allows merging main into a feat/ branch", () => assert.equal(checkCommand("git merge main", onFeat), null));
 });
+
+// Regression cases found by lemon in a real Claude Code session.
+describe("checkCommand bypass regressions", () => {
+  const onFeat = "feat/login";
+  it("blocks commit on main with git -c options", () =>
+    assert.match(checkCommand("git -c user.name=t -c user.email=t@t commit -m test", "main"), /blocked/));
+  it("blocks commit on main with git -C dir", () => assert.match(checkCommand("git -C . commit -m x", "main"), /blocked/));
+  it("blocks commit -n (short --no-verify)", () => assert.match(checkCommand("git commit -n -m x", onFeat), /no-verify/));
+  it("blocks combined short flags containing n", () => assert.match(checkCommand('git commit -anm "x"', onFeat), /no-verify/));
+  it("blocks git wrapped in bash -c quotes", () => assert.match(checkCommand("bash -c 'git commit -m t'", "main"), /blocked/));
+  it("blocks git called by absolute path", () => assert.match(checkCommand("/usr/bin/git commit -m t", "main"), /blocked/));
+  it("still allows commit on feat/ with -c options", () =>
+    assert.equal(checkCommand("git -c user.name=t commit -m x", onFeat), null));
+  it("does not treat merge -n (no-stat) as no-verify", () => assert.equal(checkCommand("git merge -n main", onFeat), null));
+});

@@ -37,6 +37,16 @@ export function pushViolation(remoteRef) {
   return null;
 }
 
+// git global options that take a separate value: `git -c k=v commit`, `git -C dir commit`.
+const GIT_OPTIONS_WITH_VALUE = ["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"];
+
+// Split `git [global options] <subcommand> [args]` into the subcommand and its arguments.
+function parseGit(words) {
+  let i = 0;
+  while (i < words.length && words[i].startsWith("-")) i += GIT_OPTIONS_WITH_VALUE.includes(words[i]) ? 2 : 1;
+  return { sub: words[i], rest: words.slice(i + 1) };
+}
+
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
 export function checkCommand(command, currentBranch) {
   if (!/\bgit\b/.test(command)) return null;
@@ -45,13 +55,17 @@ export function checkCommand(command, currentBranch) {
   const withoutSetup = command.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
 
-  for (const segment of command.split(/&&|\|\||;|\|/)) {
+  // Quotes and parentheses are dropped so `bash -c 'git commit'` is inspected like `git commit`.
+  for (const segment of command.replace(/["'()`]/g, " ").split(/&&|\|\||;|\|/)) {
     const words = segment.trim().split(/\s+/);
-    const gitAt = words.indexOf("git");
+    const gitAt = words.findIndex((w) => w === "git" || w.endsWith("/git"));
     if (gitAt === -1) continue;
-    const args = words.slice(gitAt + 1).filter((w) => !w.startsWith("-"));
-    const sub = args[0];
+    const { sub, rest } = parseGit(words.slice(gitAt + 1));
+    const args = [sub, ...rest.filter((w) => !w.startsWith("-"))];
 
+    if (sub === "commit" && rest.some((w) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))) {
+      return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
+    }
     if (["commit", "merge", "cherry-pick", "revert"].includes(sub)) {
       const problem = commitViolation(currentBranch);
       if (problem) return `git ${sub} blocked: ${problem}`;

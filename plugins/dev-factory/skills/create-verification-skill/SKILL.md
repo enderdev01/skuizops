@@ -13,7 +13,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 1. **Explore the app with kiwi.** Ask kiwi to list every user-facing feature (commands, endpoints, screens, exported APIs), the entry point of each, and an example input. Do not guess: read the code.
 
 2. **Create the control CLI.**
-   - Copy `${CLAUDE_PLUGIN_ROOT}/templates/control.mjs` to `scripts/control.mjs` in the project.
+   - Copy the template, quoting the path because it may contain spaces: `cp "${CLAUDE_PLUGIN_ROOT}/templates/control.mjs" scripts/control.mjs`.
    - Add one subcommand per user-facing feature, following the template's placeholder. CLI design rules:
      - `--json` on every command;
      - `--dry-run` on every destructive command;
@@ -28,8 +28,8 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
    - Fill the tables by running each command and recording what you observe. Never invent expected output.
 
 4. **Install the git hooks and the branch guard.**
-   - Copy `${CLAUDE_PLUGIN_ROOT}/templates/githooks/*` to `.githooks/` in the project.
-   - Copy `${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs` to `scripts/guard/branch-guard.mjs`.
+   - Copy the git hooks: `mkdir -p .githooks && cp "${CLAUDE_PLUGIN_ROOT}"/templates/githooks/* .githooks/`.
+   - Copy the guard: `mkdir -p scripts/guard && cp "${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs" scripts/guard/`.
    - `chmod +x .githooks/*`
    - Run exactly: `git config core.hooksPath .githooks`
 
