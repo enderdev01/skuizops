@@ -1,19 +1,38 @@
 // Where the plugin's Claude Code hooks are active. The plugin is installed for the whole user,
-// but its hooks only act on projects under these roots (default ~/DEV).
-// Override with DEV_FACTORY_ROOTS, a ":"-separated list of absolute paths.
-import { readFileSync, realpathSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+// but its hooks only act on projects under ~/DEV plus any roots added with DEV_FACTORY_ROOTS,
+// a ":"-separated list of absolute paths. The variable adds roots, it never replaces ~/DEV.
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Resolve symlinks through the deepest existing ancestor, so a link cannot hide its target.
+export function real(path) {
+  let head = path;
+  const tail = [];
+  while (!existsSync(head) && dirname(head) !== head) {
+    tail.unshift(basename(head));
+    head = dirname(head);
+  }
+  try {
+    return join(realpathSync(head), ...tail);
+  } catch {
+    return path;
+  }
+}
+
+// macOS volumes are case-insensitive by default: compare folded.
+export const fold = (path) => real(resolve(path)).toLowerCase();
+export const under = (path, root) => path === root || path.startsWith(`${root}${sep}`);
+
 export function scopeRoots(env = process.env) {
-  const configured = env.DEV_FACTORY_ROOTS?.split(delimiter).filter(Boolean);
-  return (configured?.length ? configured : [join(env.HOME ?? "", "DEV")]).map((root) => resolve(root));
+  const added = env.DEV_FACTORY_ROOTS?.split(delimiter).filter(Boolean) ?? [];
+  return [...new Set([join(env.HOME ?? "", "DEV"), ...added].map((root) => resolve(root)))];
 }
 
 export function inScope(dir, env = process.env) {
   if (!dir) return false;
-  const target = resolve(dir);
-  return scopeRoots(env).some((root) => target === root || target.startsWith(`${root}/`));
+  const target = fold(dir);
+  return scopeRoots(env).some((root) => under(target, fold(root)));
 }
 
 // Projects the human trusts to run their own code from hooks (the verify gate and the linter).
@@ -22,22 +41,25 @@ export function trustFile(env = process.env) {
   return join(env.HOME ?? "", ".config", "dev-factory", "trusted-projects");
 }
 
+// Exact match only, compared through symlinks: a trusted folder does not trust the projects inside it.
 export function isTrusted(dir, env = process.env) {
-  if (!dir) return false;
+  if (!dir || dir.includes("\n")) return false;
   let roots;
   try {
     roots = readFileSync(trustFile(env), "utf8").split("\n").map((l) => l.trim()).filter((l) => l.startsWith("/"));
   } catch {
     return false;
   }
-  const target = resolve(dir);
-  return roots.map((root) => resolve(root)).some((root) => target === root || target.startsWith(`${root}/`));
+  const target = real(resolve(dir));
+  return roots.some((root) => real(resolve(root)) === target);
 }
 
 // Single-quoted so a hostile directory name cannot run code when the human pastes the command.
 const sh = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 export const trustHint = (dir, env = process.env) =>
-  `mkdir -p ${sh(dirname(trustFile(env)))} && echo ${sh(resolve(dir))} >> ${sh(trustFile(env))}`;
+  dir.includes("\n")
+    ? "this directory name contains a newline and cannot be trusted: rename it."
+    : `mkdir -p ${sh(dirname(trustFile(env)))} && echo ${sh(resolve(dir))} >> ${sh(trustFile(env))}`;
 
 // The project directory a hook is running for.
 export function projectDir(input = {}) {

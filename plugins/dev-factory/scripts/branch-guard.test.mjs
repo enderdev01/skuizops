@@ -65,6 +65,53 @@ describe("checkCommand bypass regressions", () => {
   it("does not treat merge -n (no-stat) as no-verify", () => assert.equal(checkCommand("git merge -n main", onFeat), null));
 });
 
+describe("checkCommand: hook-skipping and ref-moving forms", () => {
+  const onFeat = "feat/login";
+  const blocked = (command, branch = onFeat) => it(`blocks: ${JSON.stringify(command)} on ${branch}`, () => assert.ok(checkCommand(command, branch)));
+  const allowed = (command, branch = onFeat) => it(`allows: ${JSON.stringify(command)} on ${branch}`, () => assert.equal(checkCommand(command, branch), null));
+
+  blocked("git commit --no-verif -m x");
+  blocked("git push --no-v origin feat/login");
+  blocked('git commit "--no-verify" -m x');
+  blocked("git commit '--no-verif' -m x");
+  blocked("git status\ngit commit -m x", "main");
+  blocked("git status & git commit -m x", "main");
+  blocked("git status $(git commit -m x)", "main");
+  allowed('git commit -m "git push origin main"');
+  allowed("git push -u origin feat/login 2>&1 | tail -3");
+  allowed("git push origin feat/login > push.log");
+  blocked("git push origin main 2>&1");
+
+  blocked("git rebase feat/login", "main");
+  blocked("git am patch.mbox", "main");
+  blocked("git reset --hard HEAD~1", "main");
+  allowed("git rebase main");
+  allowed("git reset --hard HEAD~1");
+
+  blocked("git update-ref refs/heads/main HEAD");
+  blocked("git commit-tree HEAD^{tree} -m x");
+  blocked("git branch -f main HEAD");
+  blocked("git branch -D main");
+  blocked("git checkout -B main");
+  blocked("git switch -C release/1.0");
+  blocked("git branch -d main");
+  blocked("git branch -D feat/old main");
+  allowed("git branch -f feat/y main");
+  allowed("git switch -C feat/y main");
+  allowed("git branch -D feat/old");
+  allowed("git checkout -b feat/x");
+  allowed("git switch -c fix/y");
+
+  blocked("git config include.path ../other.cfg");
+  blocked("git config includeIf.gitdir:/x/.path other.cfg");
+  blocked("HOME=/tmp/h git commit -m x");
+  blocked("PATH=/tmp/bin:$PATH git commit -m x");
+  blocked("GIT_DIR=/tmp/g git commit -m x");
+  blocked("GIT_CONFIG_GLOBAL=/tmp/c git commit -m x");
+  allowed("GIT_EDITOR=true git rebase --continue");
+  allowed("GIT_PAGER=cat git log -3");
+});
+
 // Regression: the entry point compared paths without resolving symlinks, so the guard
 // silently did nothing (failed open) when invoked through a symlinked path.
 describe("entry point through a symlinked path", () => {
@@ -83,10 +130,9 @@ describe("entry point through a symlinked path", () => {
   });
 });
 
-describe("checkCommand: trust list", () => {
-  it("blocks agents from writing the trust list", () =>
-    assert.match(checkCommand('echo "$PWD" >> ~/.config/dev-factory/trusted-projects', "feat/x"), /Only the human/));
-  for (const cmd of ["echo /x >> ~/.config/dev-factory/trusted-proj*", "cd ~/.config/dev-factory && echo /x >> list", "ln -s ~/.config//Dev-Factory t"]) {
-    it(`blocks a variant: ${cmd}`, () => assert.ok(checkCommand(cmd, "feat/x")));
-  }
+describe("checkCommand: after the trust list check moved to path-guard bash", () => {
+  it("still enforces the branch policy and allows the setup step", () => {
+    assert.match(checkCommand('git commit -m "x"', "main"), /protected/);
+    assert.equal(checkCommand("git config core.hooksPath .githooks", "feat/x"), null);
+  });
 });

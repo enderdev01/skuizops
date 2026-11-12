@@ -6,10 +6,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs\" claude",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs\" claude || exit 2",
             "timeout": 10,
             "onFailure": "block",
             "statusMessage": "Checking branch policy"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/path-guard.mjs\" bash || exit 2",
+            "timeout": 10,
+            "onFailure": "block",
+            "statusMessage": "Checking protected files"
           }
         ]
       },
@@ -18,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/path-guard.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/path-guard.mjs\" || exit 2",
             "timeout": 10,
             "onFailure": "block",
             "statusMessage": "Checking protected files"

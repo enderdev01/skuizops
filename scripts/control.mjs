@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // This repo's lever: check the environment and verify the plugin and marketplace.
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commitViolation } from "../plugins/dev-factory/scripts/branch-guard.mjs";
@@ -36,6 +36,18 @@ function mjsFiles(dir) {
     .map((e) => join(dir, e.parentPath ? e.parentPath.slice(join(root, dir).length) : "", e.name));
 }
 
+// First .githooks stub that is missing, not executable or does not run its guard, else null.
+function hookProblem() {
+  const guards = { "pre-commit": "branch-guard.mjs", "pre-merge-commit": "branch-guard.mjs", "pre-push": "branch-guard.mjs", "commit-msg": "attribution-guard.mjs" };
+  for (const [name, guard] of Object.entries(guards)) {
+    const file = join(root, ".githooks", name);
+    if (!existsSync(file)) return `.githooks/${name} is missing. Copy it from the dev-factory plugin templates/githooks`;
+    if (!(statSync(file).mode & 0o111)) return `.githooks/${name} is not executable. Run: chmod +x .githooks/${name}`;
+    if (!readFileSync(file, "utf8").includes(guard)) return `.githooks/${name} does not run ${guard}. Restore it from the dev-factory plugin templates/githooks`;
+  }
+  return null;
+}
+
 function doctor() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   const hooksPath = run("git", ["config", "--get", "core.hooksPath"]);
@@ -43,7 +55,7 @@ function doctor() {
   const branchProblem = commitViolation(branch.ok ? branch.output : null);
   const checks = [
     { name: "node", ok: major > 22 || (major === 22 && minor >= 18), fix: "Install Node 22.18+" },
-    { name: "git hooks", ok: hooksPath.output === ".githooks", fix: "git config core.hooksPath .githooks" },
+    { name: "git hooks", ok: hooksPath.output === ".githooks" && !hookProblem(), fix: hooksPath.output === ".githooks" ? hookProblem() : "git config core.hooksPath .githooks" },
     { name: "work branch (feat/, fix/, hotfix/)", ok: !branchProblem, fix: branchProblem },
   ];
   const text = checks.map((c) => `${c.ok ? "ok  " : "FAIL"} ${c.name}${c.ok ? "" : `  ->  ${c.fix}`}`).join("\n");

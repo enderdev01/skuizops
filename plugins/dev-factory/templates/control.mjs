@@ -2,7 +2,7 @@
 // Verification CLI: the lever agents use to check their own work.
 // Every command supports --json. Exit 0 on success, 1 on failure.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,6 +47,18 @@ function nodePin() {
   return exact ? { file: "package.json engines.node", exact: Number(exact) } : null;
 }
 
+// First .githooks stub that is missing, not executable or does not run its guard, else null.
+function hookProblem() {
+  const guards = { "pre-commit": "branch-guard.mjs", "pre-merge-commit": "branch-guard.mjs", "pre-push": "branch-guard.mjs", "commit-msg": "attribution-guard.mjs" };
+  for (const [name, guard] of Object.entries(guards)) {
+    const file = join(root, ".githooks", name);
+    if (!existsSync(file)) return `.githooks/${name} is missing. Copy it from the dev-factory plugin templates/githooks`;
+    if (!(statSync(file).mode & 0o111)) return `.githooks/${name} is not executable. Run: chmod +x .githooks/${name}`;
+    if (!readFileSync(file, "utf8").includes(guard)) return `.githooks/${name} does not run ${guard}. Restore it from the dev-factory plugin templates/githooks`;
+  }
+  return null;
+}
+
 async function doctor() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   const pin = nodePin();
@@ -75,7 +87,7 @@ async function doctor() {
       ? [{ name: "dependencies", ok: existsSync(join(root, "node_modules")), fix: "npm install" }]
       : []),
     { name: "git repository", ok: isRepo, fix: "git init" },
-    { name: "git hooks", ok: hooksPath.output === ".githooks", fix: "git config core.hooksPath .githooks" },
+    { name: "git hooks", ok: hooksPath.output === ".githooks" && !hookProblem(), fix: hooksPath.output === ".githooks" ? hookProblem() : "git config core.hooksPath .githooks" },
     { name: "work branch (feat/, fix/, hotfix/)", ok: isRepo && !branchProblem, fix: branchProblem ?? "git init" },
   ];
   const ok = checks.every((c) => c.ok);

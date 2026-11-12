@@ -14,7 +14,11 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 | `cherry` | Opus | Inspector: independently verifies a change, with evidence |
 
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
-Hooks: branch guard on Bash, a protected-files guard on Edit and Write, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
+Hooks: branch guard on Bash, a protected-files guard on Edit, Write and Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
+
+The Stop gate runs verify whenever the tree is dirty. With a clean tree it runs once per commit: it records the commit it verified in the git directory and skips while `HEAD` is still that commit. If verify still fails on the second stop of a turn, you get a warning instead of a second block. A verify that runs longer than four minutes counts as a failure.
+
+The commit-msg guard rejects any `<something>-by:` trailer that names an AI tool, lines like "generated with" or "written by" an AI tool, and commits whose author or committer email belongs to one. It checks the email, not the name, so a person called Claude can commit. Lines that start with `#` are checked too, and everything after git's scissors line (the diff of `git commit -v`) is ignored.
 
 ## What you see
 
@@ -32,21 +36,25 @@ The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentSta
 
 ## Scope
 
-The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. Change it with `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives. They run the guard installed with the plugin, and fall back to the project's `scripts/guard/` copy for contributors without it.
+The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths, adds roots and never replaces `~/DEV`. Case variants of a root and symlinks into a root are in scope. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives. They run the guard of the installed plugin, as recorded in `~/.claude/plugins/installed_plugins.json`: a newer, uninstalled or orphaned copy in the cache is never used. Contributors without the plugin fall back to the project's `scripts/guard/` copy. `node scripts/control.mjs doctor` fails when a hook file is missing, not executable or no longer runs its guard.
 
 ### Trust and protected files
 
-The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash the block is best effort, like the rest of the Bash guard. A trusted folder also trusts every project nested inside it. To trust a project, run this yourself from its root:
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, run this yourself from its root:
 
 ```bash
 mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
 ```
 
-Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. Case variants and symlinks are resolved first. You change those files by hand. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
+Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why `create-verification-skill` hands you the hook and settings steps.
+
+Shell commands that write to those paths are blocked too: redirections, `rm`, `mv`, `chmod`, `mkdir`, `sed -i`, the destination of `cp`, and `git checkout` or `git restore` of them. Reading them is allowed. This check is best effort: a script, an interpreter or a variable can still write, so the git hooks and your review stay the authoritative layers. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
 
 ## Branch policy
 
-Commit only on `feat/`, `fix/` or `hotfix/` branches. Never commit or push to `develop`, `desarrollo`, `desa`, `main`, `master`, `production`, `prod`, `test` or `release` (or anything under them). `--no-verify` (and its short form `git commit -n`) and `core.hooksPath` changes are blocked; the only allowed form is `git config core.hooksPath .githooks`.
+Commit only on `feat/`, `fix/` or `hotfix/` branches. Never commit or push to `develop`, `desarrollo`, `desa`, `main`, `master`, `production`, `prod`, `test` or `release` (or anything under them). `--no-verify` (any abbreviation of it, and its short form `git commit -n`) and `core.hooksPath` changes are blocked; the only allowed form is `git config core.hooksPath .githooks`.
+
+On a protected branch, `rebase`, `am` and `reset` are blocked like `commit` and `merge`. Anywhere, agents cannot run `git update-ref` or `git commit-tree`, force-move or delete a protected branch (`branch -f`, `branch -D`, `checkout -B`, `switch -C`), add a git config include, or set `HOME`, `PATH`, `GIT_DIR`, `GIT_EXEC_PATH` or `GIT_CONFIG*` in front of a git command. A command is read piece by piece, split on `;`, `&`, `|`, newlines, parentheses and backticks, so a commit message that contains a git command inside parentheses or on its own line can be blocked by mistake: reword it. The Bash check is best effort; the git hooks are the authoritative layer.
 
 ## Install
 
