@@ -41,7 +41,9 @@ export function pushViolation(remoteRef) {
 export function checkCommand(command, currentBranch) {
   if (!/\bgit\b/.test(command)) return null;
   if (/--no-verify\b/.test(command)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
-  if (/core\.hooksPath/i.test(command)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
+  // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
+  const withoutSetup = command.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
+  if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
 
   for (const segment of command.split(/&&|\|\||;|\|/)) {
     const words = segment.trim().split(/\s+/);
