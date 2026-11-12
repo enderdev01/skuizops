@@ -11,7 +11,7 @@ const file = input.tool_input?.file_path ?? input.tool_response?.filePath;
 if (!file || !/\.(ts|tsx|js|jsx|mjs)$/.test(file)) process.exit(0);
 
 const cwd = projectDir(input);
-// Hooks only act on projects under the configured roots (default ~/DEV).
+// Hooks only act on projects under the scope roots (~/DEV plus DEV_FACTORY_ROOTS).
 if (!inScope(cwd)) process.exit(0);
 // ESLint loads the project's JS config, which is the project's own code: only for trusted projects.
 if (!isTrusted(cwd)) process.exit(0);

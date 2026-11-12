@@ -10,7 +10,7 @@ const input = JSON.parse(readFileSync(0, "utf8") || "{}");
 if (input.stop_hook_active) process.exit(0);
 
 const cwd = projectDir(input);
-// Hooks only act on projects under the configured roots (default ~/DEV).
+// Hooks only act on projects under the scope roots (~/DEV plus DEV_FACTORY_ROOTS).
 if (!inScope(cwd)) process.exit(0);
 
 // Skip when nothing changed (pure Q&A turns). Outside a git repo, always verify.

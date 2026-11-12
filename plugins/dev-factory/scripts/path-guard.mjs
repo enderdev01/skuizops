@@ -2,28 +2,9 @@
 // Protected anywhere: the dev-factory config dir (trust list) and the installed plugins.
 // Protected under the scope roots (~/DEV): any .githooks/, scripts/guard/ or .git/ path, in any project.
 // The human edits these by hand.
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
-import { inScope, isMain, projectDir, scopeRoots, trustFile } from "./scope.mjs";
-
-// Resolve symlinks through the deepest existing ancestor, so a link cannot hide a protected target.
-function real(path) {
-  let head = path;
-  const tail = [];
-  while (!existsSync(head) && dirname(head) !== head) {
-    tail.unshift(basename(head));
-    head = dirname(head);
-  }
-  try {
-    return join(realpathSync(head), ...tail);
-  } catch {
-    return path;
-  }
-}
-
-// macOS volumes are case-insensitive by default: compare folded.
-const fold = (path) => real(resolve(path)).toLowerCase();
-const under = (path, root) => path === root || path.startsWith(`${root}${sep}`);
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
+import { fold, inScope, isMain, projectDir, scopeRoots, trustFile, under } from "./scope.mjs";
 
 export function editViolation(file, project, env = process.env) {
   if (!file) return null;

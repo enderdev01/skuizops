@@ -100,7 +100,7 @@ function main(mode) {
 
   if (mode === "claude") {
     const input = JSON.parse(stdin || "{}");
-    // Outside the configured roots (default ~/DEV) the Claude hook does nothing; installed git hooks still apply.
+    // Outside the scope roots (~/DEV plus DEV_FACTORY_ROOTS) the Claude hook does nothing; installed git hooks still apply.
     if (!inScope(projectDir(input))) return;
     const command = input.tool_input?.command ?? "";
     const problem = checkCommand(command, currentBranch(input.cwd ?? process.cwd()));

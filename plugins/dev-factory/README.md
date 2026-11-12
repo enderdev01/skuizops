@@ -32,11 +32,11 @@ The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentSta
 
 ## Scope
 
-The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. Change it with `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives. They run the guard installed with the plugin, and fall back to the project's `scripts/guard/` copy for contributors without it.
+The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths, adds roots and never replaces `~/DEV`. Case variants of a root and symlinks into a root are in scope. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives. They run the guard installed with the plugin, and fall back to the project's `scripts/guard/` copy for contributors without it.
 
 ### Trust and protected files
 
-The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash the block is best effort, like the rest of the Bash guard. A trusted folder also trusts every project nested inside it. To trust a project, run this yourself from its root:
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash the block is best effort, like the rest of the Bash guard. Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, run this yourself from its root:
 
 ```bash
 mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
