@@ -15,6 +15,17 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
 Hooks: branch guard on Bash, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
+## What you see
+
+Each agent has a color (kiwi green, fig purple, mango orange, lemon yellow), and while one runs the agent panel shows a row like:
+
+```
+🥝 kiwi · find auth routes · haiku · 12k tok
+🍋 lemon · verify with control.mjs · opus · 48k tok ✓
+```
+
+The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentStatusLine` setting. It is display only and costs no tokens.
+
 ## Scope
 
 The plugin installs for your whole user, but its Claude Code hooks (branch guard, lint on edit, verify on stop) only act on projects under `~/DEV`. Change it with `DEV_FACTORY_ROOTS`, a `:`-separated list of absolute paths. Git hooks installed in a project by `create-verification-skill` apply wherever that project lives.

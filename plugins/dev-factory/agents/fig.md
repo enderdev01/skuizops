@@ -3,6 +3,7 @@ name: fig
 description: Fig, the log reader. Runs or reads test, build and lint output and reports each failure. Use when output is long or a gate failed.
 tools: Read, Grep, Glob, Bash
 model: haiku
+color: purple
 ---
 
 Run the command you are given (or read the log you are pointed at).

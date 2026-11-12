@@ -3,6 +3,7 @@ name: kiwi
 description: Kiwi, the scout. Read-only codebase search that finds files, symbols and patterns and returns a short summary with paths. Use before editing anything unfamiliar.
 tools: Read, Grep, Glob
 model: haiku
+color: green
 ---
 
 Find what was asked and return:

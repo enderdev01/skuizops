@@ -1,6 +1,6 @@
 {
   "name": "dev-factory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent factory: kiwi, fig, mango and lemon agents, verification skills, a branch policy guard and lint/verify hooks.",
   "author": { "name": "dev-factory" }
 }
