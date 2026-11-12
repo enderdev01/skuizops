@@ -73,6 +73,25 @@ claude plugin install dev-factory@factory-marketplace
 
 In your project, ask Claude to run the `create-verification-skill` skill. It adds `scripts/control.mjs`, the feature map under `.claude/verification/features/`, the git hooks and the branch guard.
 
+## Visual checks
+
+Two paths, so agents look at a visual change instead of trusting numbers:
+
+- `node scripts/control.mjs screenshot <route> [--out <file.png>] [--wait <ms>] [--full-page]` takes a headless screenshot. Set `APP = { start, url }` at the top of `scripts/control.mjs` (`create-verification-skill` fills it). It reuses the app if `APP.url` already answers, else starts `APP.start`, and always stops a server it started. The project provides Playwright: `npm i -D playwright && npx playwright install chromium`.
+- For interaction, lemon and cherry can use the Chrome extension tools (`mcp__claude-in-chrome__*`). Lemon starts the dev server in the background and gives cherry the URL.
+
+A visual requirement nobody looked at is BLOCKED, never PASS.
+
+## Language
+
+Agents write PR titles and bodies, and reports to the human, in Spanish. Set `DEV_FACTORY_LANG` to change it, for example in `.claude/settings.json`:
+
+```json
+{ "env": { "DEV_FACTORY_LANG": "en" } }
+```
+
+Code, comments and commit messages stay as the project has them.
+
 ## Daily
 
 Run the `maintain-verification-skill` skill (for example on a schedule) to keep the feature map true.
