@@ -14,7 +14,7 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 | `cherry` | Opus | Inspector: independently verifies a change, with evidence |
 
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
-Hooks: branch guard on Bash, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
+Hooks: branch guard on Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
 ## What you see
 

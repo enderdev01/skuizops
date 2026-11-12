@@ -29,7 +29,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 4. **Install the git hooks and the branch guard.**
    - Copy the git hooks: `mkdir -p .githooks && cp "${CLAUDE_PLUGIN_ROOT}"/templates/githooks/* .githooks/`.
-   - Copy the guard: `mkdir -p scripts/guard && cp "${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs" "${CLAUDE_PLUGIN_ROOT}/scripts/scope.mjs" scripts/guard/` (the guard imports `scope.mjs`; copy both).
+   - Copy the guard: `mkdir -p scripts/guard && cp "${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs" "${CLAUDE_PLUGIN_ROOT}/scripts/scope.mjs" "${CLAUDE_PLUGIN_ROOT}/scripts/attribution-guard.mjs" scripts/guard/` (both guards import `scope.mjs`; copy all three).
    - `chmod +x .githooks/*`
    - Run exactly: `git config core.hooksPath .githooks`
 

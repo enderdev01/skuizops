@@ -15,5 +15,6 @@ You receive a spec with: the files you may touch, the acceptance criteria, and t
 4. Run `node scripts/control.mjs verify` (or the project's verify command) and fix every failure.
 5. Touch only the files you were given. If the spec is wrong or incomplete, stop and say what is missing.
 6. Commit only on a `feat/`, `fix/` or `hotfix/` branch. Never commit or push to a protected branch (see AGENTS.md).
+7. Commits are authored by the human only: never add `Co-Authored-By` AI trailers or "Generated with" footers to commits or PRs.
 
 Report: files changed, which acceptance criteria you covered, and the observed verify result.

@@ -29,4 +29,5 @@ Run independent delegations in parallel in one message (for example two kiwi sea
 - Never verify your own work: a change is done only after `cherry` reports PASS, or, for a trivial change, after `node scripts/control.mjs verify` passes.
 - When cherry reports a FAIL, push the fix up the ladder (the `push-up-the-ladder` skill): fix it, then add the check that would have caught it.
 - Commit only on a `feat/`, `fix/` or `hotfix/` branch. Never commit or push to a protected branch (see AGENTS.md).
+- Commits are authored by the human only: never add `Co-Authored-By` AI trailers or "Generated with" footers to commits or PRs.
 - Before you finish, tell the human in one line which agents you used and why.
