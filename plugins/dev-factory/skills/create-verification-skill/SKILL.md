@@ -43,7 +43,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
    Keep `.claude/settings.local.json` ignored. If the ignoring rule is `.claude/` with a trailing slash, git cannot re-include files under it: change it to `.claude/*` first. Re-run `git check-ignore` until neither path is ignored.
 
 6. **Make it green, without touching the app.**
-   - Ask the human to trust the project, so the Stop gate and the linter run here. You cannot do it: the list is blocked for agents. Give them this command to run from the project root: `mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects`.
+   - Ask the human to trust the project, so the Stop gate and the linter run here. You cannot do it: the list is blocked for agents. Ask them to type `/dev-factory:trust` in this session (only the human can run it), and wait until they say it is done.
    - Run `node scripts/control.mjs doctor`, then `node scripts/control.mjs verify`.
    - Fix failures caused by this setup: the files you created, `package.json` scripts you added, hooks and config.
    - Fix environment problems `doctor` reports (for example a Node version that does not match the project's pin) by changing the environment, not the code: run `nvm use`, or tell the human.

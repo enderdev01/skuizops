@@ -45,7 +45,7 @@ function main() {
   // The command is the project's own code: run it only for projects the human trusted.
   if (!isTrusted(cwd)) {
     process.stdout.write(
-      `${JSON.stringify({ systemMessage: `dev-factory: verify skipped, this project is not trusted. To trust it, run yourself: ${trustHint(cwd)}` })}\n`,
+      `${JSON.stringify({ systemMessage: `dev-factory: verify skipped, this project is not trusted. To trust it, type /dev-factory:trust in this session, or run yourself: ${trustHint(cwd)}` })}\n`,
     );
     process.exit(0);
   }

@@ -38,7 +38,8 @@ export function editViolation(file, project, env = process.env) {
 const WRITES_ALL_ARGS = ["rm", "rmdir", "mv", "tee", "touch", "chmod", "chown", "chflags", "truncate", "unlink", "mkdir", "ln"];
 const GIT_WRITES = ["checkout", "restore", "rm", "mv", "clean", "apply", "stash"];
 const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "rg", "diff"];
-const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory/i;
+// The list itself, its directory, or the script the human-only /dev-factory:trust command runs.
+const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory|\btrust\.mjs\b/i;
 
 // Paths a single command segment writes to, as raw words (quotes and `~` not yet resolved).
 function writtenWords(words) {
@@ -66,7 +67,8 @@ function writtenWords(words) {
 export function commandViolation(command, { project, cwd, env = process.env } = {}) {
   // `>|` and `>&` are redirections too: make them `>` so the split below does not cut them from their target.
   const segments = command.replace(/>[|&]/g, ">").split(/\n|;|&|\||\(|\)|`|\$\(/);
-  if (MENTIONS_TRUST_LIST.test(command)) {
+  // The shell drops quotes and backslashes, so `tru"st".mjs` is trust.mjs: match with them removed.
+  if (MENTIONS_TRUST_LIST.test(command.replace(/["'\\]/g, ""))) {
     const readOnly = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
     if (!readOnly) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   }
