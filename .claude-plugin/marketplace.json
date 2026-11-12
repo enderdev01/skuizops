@@ -1,0 +1,12 @@
+{
+  "name": "factory-marketplace",
+  "owner": { "name": "dev-factory" },
+  "metadata": { "description": "Local marketplace for the dev-factory agent plugin." },
+  "plugins": [
+    {
+      "name": "dev-factory",
+      "source": "./plugins/dev-factory",
+      "description": "Agent factory: scout, log reader, builder and inspector agents, a verification CLI, a branch policy and hooks that keep agents honest."
+    }
+  ]
+}
