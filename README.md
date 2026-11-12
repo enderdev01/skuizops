@@ -1,10 +1,21 @@
 # la-fruteria
 
-A Claude Code marketplace that ships one plugin, `dev-factory`. The plugin makes coding agents check their own work: it blocks commits to protected branches, protects the files that enforce the policy, rejects AI attribution in commits, and does not let a session finish while the project's verify is red.
+**Español** · [English](README.en.md)
 
-It has zero dependencies (Node built-ins only) and adds about 50 ms to a tool call.
+Un marketplace de Claude Code con un solo plugin: `dev-factory`.
 
-## Quick path
+**Qué hace, en una frase:** impide que un agente de IA rompa las reglas del equipo, aunque lo intente.
+
+| Sin el plugin | Con `dev-factory` |
+|---|---|
+| El agente hace commit directo en `main` | Bloqueado. Debe crear una rama `feat/`, `fix/` o `hotfix/` |
+| El agente desactiva los hooks de git para saltarse una regla | Bloqueado. No puede tocar esos archivos |
+| El agente firma el commit como coautor | Bloqueado. Los commits son solo de la persona |
+| El agente dice "listo" con los tests en rojo | No puede terminar hasta que pasen |
+
+No tiene dependencias (solo Node) y cada revisión tarda unos 50 ms: no se nota.
+
+## Instalación
 
 ```bash
 claude plugin marketplace add enderdev01/la-fruteria
@@ -14,60 +25,102 @@ claude plugin marketplace add enderdev01/la-fruteria
 claude plugin install dev-factory@factory-marketplace
 ```
 
-Then, in a project under `~/DEV`:
+Luego, en cada proyecto dentro de `~/DEV`:
 
-1. Ask Claude to run the `create-verification-skill` skill. It adds `scripts/control.mjs`, the feature map, the git hooks and the branch guard.
-2. Type `/dev-factory:trust` so the verify gate and the linter may run that project's code.
-3. Work as usual. The guards act on their own.
+| Paso | Qué hacer | Para qué |
+|---|---|---|
+| 1 | Pedirle a Claude que ejecute la skill `create-verification-skill` | Crea el script de verificación, los hooks de git y el mapa de funcionalidades |
+| 2 | Escribir `/dev-factory:trust` en la sesión | Autoriza al plugin a ejecutar los tests de ese proyecto |
+| 3 | Abrir una sesión nueva y trabajar normal | Las protecciones actúan solas |
 
-## How it works
+## Cómo funciona
 
-Every guarantee sits at the strongest layer that can hold it. Prose in `AGENTS.md` is the last resort, not the first.
+Cada vez que el agente quiere hacer algo, el plugin lo revisa **antes** de que ocurra.
 
-```mermaid
-flowchart LR
-  A[Agent wants to act] --> B{Bash?}
-  B -- yes --> C[branch-guard + path-guard]
-  B -- Edit/Write --> D[path-guard]
-  C -- violation --> X[Blocked, reason sent back to the agent]
-  D -- violation --> X
-  C -- ok --> E[Tool runs]
-  D -- ok --> E
-  E --> F[ESLint on the edited file]
-  F --> G{Agent tries to stop}
-  G --> H[verify-gate runs the project's verify]
-  H -- red --> X
-  H -- green --> I[Session ends]
-  E -. git commit / push .-> J[git hooks: same guards, authoritative]
+```text
+     El agente quiere ejecutar un comando o editar un archivo
+                               |
+                               v
+                       ¿Rompe una regla?
+                        |             |
+                       SÍ             NO
+                        |             |
+                        v             v
+                   BLOQUEADO      SE EJECUTA
+             recibe el motivo,        |
+           corrige y reintenta        v
+                            ¿El agente quiere terminar?
+                              |                   |
+                        tests en rojo       tests en verde
+                              |                   |
+                              v                   v
+                         NO TERMINA        SESIÓN TERMINADA
+                       recibe el error
+                        y lo arregla
 ```
 
-| Layer | Piece | What it guarantees |
+Hay dos barreras, una detrás de la otra:
+
+| Barrera | Cuándo actúa | A quién aplica |
 |---|---|---|
-| Claude Code hooks | `branch-guard`, `path-guard` | An agent's command or edit is checked before it runs |
-| Claude Code hooks | `check-file`, `verify-gate` | Lint errors and a red verify come back to the agent in the same turn |
-| Git hooks | `pre-commit`, `pre-merge-commit`, `pre-push`, `commit-msg` | The same policy for every agent and every human, even without the plugin |
-| Agents | `lemon` delegates to `kiwi`, `fig`, `mango`, `cherry` | Cheap models search and read logs; a separate model verifies with evidence |
-| Skills | `verify`, `push-up-the-ladder`, `create-` and `maintain-verification-skill` | A reviewer's correction becomes a test or a lint rule, not one more line of prose |
+| **Hooks de Claude Code** | Antes de cada comando o edición del agente | Solo a los agentes |
+| **Hooks de git** | En cada `commit` y `push` | A todos: agentes y personas, incluso sin el plugin instalado |
 
-The Bash checks are best effort (a script or an interpreter can still write); the git hooks are the authoritative layer. Details, scope and the trust model: [plugins/dev-factory/README.md](plugins/dev-factory/README.md).
+La primera es rápida pero se puede esquivar con ingenio (un script, por ejemplo). La segunda es la que manda: si algo se escapa de la primera, git lo frena.
 
-### The agents
+### Las cinco protecciones
 
-| Agent | Model | Role |
+| Protección | Qué revisa | Ejemplo de lo que frena |
 |---|---|---|
-| 🍋 `lemon` | Session model | Orchestrator: the main session, delegates on its own |
-| 🥝 `kiwi` | Haiku | Scout: read-only codebase search |
-| 🫐 `fig` | Haiku | Log reader: reports each test, build and lint failure |
-| 🥭 `mango` | Sonnet | Builder: implements one well-specified unit |
-| 🍒 `cherry` | Opus | Inspector: independently verifies a change, with evidence |
+| `branch-guard` | En qué rama se hace commit o push | `git commit` estando en `main` |
+| `path-guard` | Qué archivos se modifican | Borrar la carpeta `.githooks` |
+| `attribution-guard` | El mensaje y el autor del commit | Una línea `Co-Authored-By` de una IA |
+| `check-file` | El archivo recién editado, con ESLint | Un error de lint que el agente dejó |
+| `verify-gate` | Los tests del proyecto, al terminar | Dar por terminada una tarea con tests rotos |
 
-## Demo
+### El equipo de agentes
 
-This is real output. `bench` creates a throwaway repo on `main`, then runs each guard exactly as its hook does:
+El plugin también reparte el trabajo: el modelo caro solo se usa donde hace falta.
+
+| Agente | Modelo | Qué hace | Cuándo se usa |
+|---|---|---|---|
+| 🍋 `lemon` | El de la sesión | Organiza y reparte | Siempre: es la sesión principal |
+| 🥝 `kiwi` | Haiku (barato) | Busca en el código, sin editar | Antes de tocar algo desconocido |
+| 🫐 `fig` | Haiku (barato) | Lee salidas largas de tests y builds | Cuando algo falla |
+| 🥭 `mango` | Sonnet (medio) | Implementa una tarea bien definida | Cuando ya se sabe qué construir |
+| 🍒 `cherry` | Opus (caro) | Comprueba que el cambio funciona, con evidencia | Al terminar un cambio importante |
+
+Detalle completo de reglas, alcance y modelo de confianza: [plugins/dev-factory/README.md](plugins/dev-factory/README.md) (en inglés).
+
+## Demostración
+
+Estos resultados son reales. Se obtienen con:
 
 ```bash
 node scripts/control.mjs bench
 ```
+
+El comando crea un repositorio temporal en la rama `main` y ejecuta cada protección igual que lo haría Claude Code.
+
+| El agente intenta | Resultado | Lo que el agente recibe |
+|---|---|---|
+| `git commit -m "quick fix"` en `main` | 🛑 Bloqueado | `"main" is a protected branch. Work on a feat/, fix/ or hotfix/ branch` |
+| `git push origin main` | 🛑 Bloqueado | `Pushing to protected branch "main" is forbidden. Open a PR` |
+| `git commit --no-verify` | 🛑 Bloqueado | `--no-verify is forbidden: the git hooks enforce the branch policy` |
+| `git config core.hooksPath /dev/null` | 🛑 Bloqueado | `Changing core.hooksPath is forbidden` |
+| `rm -rf .githooks` | 🛑 Bloqueado | `.githooks enforces the branch and commit policy. Agents cannot change it` |
+| Editar `.githooks/pre-commit` | 🛑 Bloqueado | `Agents cannot change it: ask the human to edit it` |
+| Commit con `Co-Authored-By: Claude` | 🛑 Bloqueado | `AI attribution is forbidden in commits, remove this line` |
+| `git status` | ✅ Permitido | (nada) |
+| `npm test` | ✅ Permitido | (nada) |
+| `echo done > notes.txt` | ✅ Permitido | (nada) |
+| Editar `src/app.js` | ✅ Permitido | (nada) |
+| Commit con mensaje `feat: add login` | ✅ Permitido | (nada) |
+
+Al recibir el motivo, el agente se corrige solo: crea una rama `feat/` en vez de insistir.
+
+<details>
+<summary>Salida completa del comando</summary>
 
 ```text
 ok   BLOCK  54ms  branch-guard      git commit -m "quick fix"
@@ -93,33 +146,44 @@ ok   allow  66ms  attribution-guard commit message ending in "feat: add login"
 median of 20 runs per case, node 26.13.0
 ```
 
-The agent receives the line after `->` and corrects itself: it creates a `feat/` branch instead of retrying. `bench` exits 1 if any case gets the wrong verdict.
+El comando termina con error si alguna protección da el veredicto equivocado.
 
-## Benchmarks
+</details>
 
-Measured on an Apple M1 Pro, Node 26.13.0, median of 20 runs. Reproduce with `node scripts/control.mjs bench` (add `--json` for raw data).
+## Rendimiento
 
-| What | Result |
+**¿Cuánto frena al agente?** Unas 50 milésimas de segundo por acción. Un parpadeo dura el doble.
+
+Cada bloque `█` son 5 ms:
+
+| Qué se mide | Tiempo | |
+|---|---|---|
+| Arrancar Node sin hacer nada (referencia) | 34 ms | `███████` |
+| `path-guard` en cada comando o edición | 38–43 ms | `████████` |
+| `branch-guard` en cada comando | 52–56 ms | `███████████` |
+| `attribution-guard` en cada commit | 66 ms | `█████████████` |
+
+Cómo leerlo:
+
+- **Casi todo el tiempo es Node arrancando** (34 ms). La revisión en sí suma entre 5 y 30 ms.
+- **Un comando paga dos revisiones** (`branch-guard` y `path-guard`). Una edición paga una.
+- **Los tests al terminar cuestan lo que cuesten tus tests.** Con el árbol limpio se ejecutan una vez por commit y después se omiten.
+
+Otros datos:
+
+| Dato | Valor |
 |---|---|
-| `branch-guard` per Bash call | 52–56 ms |
-| `path-guard` per Bash, Edit or Write call | 38–43 ms |
-| `attribution-guard` per commit | 66 ms |
-| Bare `node -e ""` on the same machine | 34 ms |
-| Tokens spent by a guard that allows the call | 0 |
-| Plugin test suite | 260 tests, 34 suites, 0 failures, 6.0 s |
-| Runtime dependencies | 0 |
+| Tokens que gasta una revisión que permite la acción | 0 |
+| Tests del plugin | 260, todos en verde, en 6 segundos |
+| Dependencias | 0 |
 
-How to read it:
+Medido en un Apple M1 Pro con Node 26.13.0, mediana de 20 ejecuciones. Para repetirlo: `node scripts/control.mjs bench` (con `--json` para los datos crudos).
 
-- Most of the cost is Node starting up (34 ms). The guard logic itself adds 5 to 30 ms.
-- A Bash call runs both guards, so it pays for two processes. An Edit pays for one.
-- The verify gate costs whatever your project's `verify` costs. With a clean tree it runs once per commit, then skips.
+> **Lo que no está medido:** si los agentes escriben mejor código, ni cuántos tokens ahorra delegar en Haiku y Sonnet. Depende del modelo y de la tarea, y este repositorio todavía no tiene cómo medirlo.
 
-**Not measured here:** whether the agents write better code, or how many tokens delegation to Haiku and Sonnet saves. Those depend on the model and the task, and this repo has no harness for them yet.
+## Contribuir
 
-## Contributing
-
-Read [AGENTS.md](AGENTS.md), then:
+Leer [AGENTS.md](AGENTS.md) y ejecutar:
 
 ```bash
 node scripts/control.mjs doctor
@@ -129,4 +193,4 @@ node scripts/control.mjs doctor
 node scripts/control.mjs verify
 ```
 
-Commit only on `feat/`, `fix/` or `hotfix/` branches; changes reach protected branches through a pull request.
+Los commits van solo en ramas `feat/`, `fix/` o `hotfix/`. Los cambios llegan a las ramas protegidas por pull request.
