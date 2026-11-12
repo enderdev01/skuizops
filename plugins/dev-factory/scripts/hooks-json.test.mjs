@@ -17,7 +17,7 @@ function run(command, source) {
 }
 
 describe("PreToolUse hook commands", () => {
-  it("covers the branch guard and the path guard", () => assert.equal(commands.length, 2));
+  it("covers the branch guard and the path guard (Edit and Bash)", () => assert.equal(commands.length, 3));
   for (const command of commands) {
     it(`blocks when the guard throws: ${command}`, () => assert.equal(run(command, 'throw new Error("boom");\n'), 2));
     it(`blocks when the guard cannot be parsed: ${command}`, () => assert.equal(run(command, "const = ;\n"), 2));

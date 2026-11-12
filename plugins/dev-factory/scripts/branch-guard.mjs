@@ -49,8 +49,6 @@ function parseGit(words) {
 
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
 export function checkCommand(command, currentBranch) {
-  // Best effort, like the rest of this check: any mention of the trust list or the dev-factory config dir.
-  if (/trusted-proj|\.config\b.*dev-factory/i.test(command)) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   if (!/\bgit\b/.test(command)) return null;
   if (/--no-verify\b/.test(command)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.

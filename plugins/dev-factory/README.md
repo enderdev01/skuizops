@@ -36,13 +36,15 @@ The plugin installs for your whole user, but its Claude Code hooks (branch guard
 
 ### Trust and protected files
 
-The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash the block is best effort, like the rest of the Bash guard. Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, run this yourself from its root:
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, run this yourself from its root:
 
 ```bash
 mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
 ```
 
-Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. Case variants and symlinks are resolved first. You change those files by hand. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
+Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why `create-verification-skill` hands you the hook and settings steps.
+
+Shell commands that write to those paths are blocked too: redirections, `rm`, `mv`, `chmod`, `mkdir`, `sed -i`, the destination of `cp`, and `git checkout` or `git restore` of them. Reading them is allowed. This check is best effort: a script, an interpreter or a variable can still write, so the git hooks and your review stay the authoritative layers. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
 
 ## Branch policy
 

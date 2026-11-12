@@ -83,10 +83,9 @@ describe("entry point through a symlinked path", () => {
   });
 });
 
-describe("checkCommand: trust list", () => {
-  it("blocks agents from writing the trust list", () =>
-    assert.match(checkCommand('echo "$PWD" >> ~/.config/dev-factory/trusted-projects', "feat/x"), /Only the human/));
-  for (const cmd of ["echo /x >> ~/.config/dev-factory/trusted-proj*", "cd ~/.config/dev-factory && echo /x >> list", "ln -s ~/.config//Dev-Factory t"]) {
-    it(`blocks a variant: ${cmd}`, () => assert.ok(checkCommand(cmd, "feat/x")));
-  }
+describe("checkCommand: after the trust list check moved to path-guard bash", () => {
+  it("still enforces the branch policy and allows the setup step", () => {
+    assert.match(checkCommand('git commit -m "x"', "main"), /protected/);
+    assert.equal(checkCommand("git config core.hooksPath .githooks", "feat/x"), null);
+  });
 });

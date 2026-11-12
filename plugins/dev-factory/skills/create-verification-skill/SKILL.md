@@ -27,13 +27,13 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
    - One file per feature (linked from the Details column) with a table of expected input and output, plus the edge cases (empty, very large, invalid input).
    - Fill the tables by running each command and recording what you observe. Never invent expected output.
 
-4. **Install the git hooks and the branch guard.**
+4. **Have the human install the git hooks and the branch guard.** You cannot do it: `.githooks/` and `scripts/guard/` are protected from agents. Give the human these commands to run from the project root, with `${CLAUDE_PLUGIN_ROOT}` replaced by its real path, and wait until they say it is done:
    - Copy the git hooks: `mkdir -p .githooks && cp "${CLAUDE_PLUGIN_ROOT}"/templates/githooks/* .githooks/`.
    - Copy the guard: `mkdir -p scripts/guard && cp "${CLAUDE_PLUGIN_ROOT}/scripts/branch-guard.mjs" "${CLAUDE_PLUGIN_ROOT}/scripts/scope.mjs" "${CLAUDE_PLUGIN_ROOT}/scripts/attribution-guard.mjs" scripts/guard/` (both guards import `scope.mjs`; copy all three).
    - `chmod +x .githooks/*`
    - Run exactly: `git config core.hooksPath .githooks`
 
-5. **Make lemon the orchestrator of this project.** In `.claude/settings.json`, set `"agent": "dev-factory:lemon"`. Read the file first and merge: keep every existing key, create the file only if it is missing. New sessions in this project then run as lemon, which delegates to kiwi, fig, mango and cherry on its own.
+5. **Have the human make lemon the orchestrator of this project.** `.claude/settings.json` is protected from agents too. Ask the human to set `"agent": "dev-factory:lemon"` in it, keeping every existing key and creating the file only if it is missing. New sessions in this project then run as lemon, which delegates to kiwi, fig, mango and cherry on its own.
 
    **Make sure git tracks it.** The feature map is the project's memory, so it must be committed. Run `git check-ignore -v .claude/settings.json .claude/verification/features/README.md`. If either is ignored (often `.claude/` is ignored as a whole), add these lines to `.gitignore`, after the ignoring rule:
    ```
