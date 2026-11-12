@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { isMain } from "./scope.mjs";
 
-const EMOJI = { kiwi: "🥝", fig: "🫐", mango: "🥭", lemon: "🍋" };
+const EMOJI = { kiwi: "🥝", fig: "🫐", mango: "🥭", lemon: "🍋", cherry: "🍒" };
 const DONE = { completed: "✓", failed: "✗", error: "✗", killed: "✗", cancelled: "✗" };
 
 const shortModel = (model) => model?.match(/haiku|sonnet|opus|fable/i)?.[0].toLowerCase() ?? model;

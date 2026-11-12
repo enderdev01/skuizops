@@ -33,8 +33,10 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
    - `chmod +x .githooks/*`
    - Run exactly: `git config core.hooksPath .githooks`
 
-5. **Make it green.** Run `node scripts/control.mjs doctor`, then `node scripts/control.mjs verify`. Fix every failure and repeat until both exit 0.
+5. **Make lemon the orchestrator of this project.** In `.claude/settings.json`, set `"agent": "dev-factory:lemon"`. Read the file first and merge: keep every existing key, create the file only if it is missing. New sessions in this project then run as lemon, which delegates to kiwi, fig, mango and cherry on its own.
 
-6. **Document it.** Add the `doctor` and `verify` commands and the branch policy to the project's AGENTS.md, and point to the feature map.
+6. **Make it green.** Run `node scripts/control.mjs doctor`, then `node scripts/control.mjs verify`. Fix every failure and repeat until both exit 0.
+
+7. **Document it.** Add the `doctor` and `verify` commands and the branch policy to the project's AGENTS.md, and point to the feature map.
 
 Report: files created, the observed output of `doctor` and `verify`, and the number of features catalogued.

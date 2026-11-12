@@ -17,7 +17,7 @@ describe("formatRow", () => {
   it("shows the fruit emoji, name, task, short model and tokens", () =>
     assert.equal(formatRow(task(), 200), "🥝 kiwi · find auth routes · haiku · 12k tok"));
 
-  for (const [agent, emoji] of [["fig", "🫐"], ["mango", "🥭"], ["lemon", "🍋"]]) {
+  for (const [agent, emoji] of [["fig", "🫐"], ["mango", "🥭"], ["lemon", "🍋"], ["cherry", "🍒"]]) {
     it(`uses ${emoji} for ${agent}`, () =>
       assert.ok(formatRow(task({ agentType: `dev-factory:${agent}`, name: agent }), 200).startsWith(`${emoji} ${agent}`)));
   }

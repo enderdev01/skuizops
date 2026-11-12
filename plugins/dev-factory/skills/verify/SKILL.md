@@ -1,6 +1,6 @@
 ---
 name: verify
-description: How to run this app and check that a change actually works. Use before claiming any change is done, and whenever lemon (the verifier) runs.
+description: How to run this app and check that a change actually works. Use before claiming any change is done, and whenever cherry (the verifier) runs.
 ---
 
 # Verify

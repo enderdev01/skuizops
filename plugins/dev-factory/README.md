@@ -10,19 +10,23 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 | `kiwi` | Haiku | Scout: read-only codebase search |
 | `fig` | Haiku | Log reader: reports each test, build and lint failure |
 | `mango` | Sonnet | Builder: implements one well-specified unit |
-| `lemon` | Opus | Inspector: independently verifies a change, with evidence |
+| `lemon` | Session model | Orchestrator: the main session in set-up projects, delegates on its own |
+| `cherry` | Opus | Inspector: independently verifies a change, with evidence |
 
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
 Hooks: branch guard on Bash, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
 ## What you see
 
-Each agent has a color (kiwi green, fig purple, mango orange, lemon yellow), and while one runs the agent panel shows a row like:
+Each agent has a color (kiwi green, fig purple, mango orange, cherry red, lemon yellow), and while one runs the agent panel shows a row like:
 
 ```
 🥝 kiwi · find auth routes · haiku · 12k tok
-🍋 lemon · verify with control.mjs · opus · 48k tok ✓
+🍒 cherry · verify with control.mjs · opus · 48k tok ✓
 ```
+
+Lemon is not listed there: it is the main session, not a subagent. `create-verification-skill` sets `"agent": "dev-factory:lemon"` in the project's `.claude/settings.json`, so only set-up projects run as lemon. Lemon may delegate only to kiwi, fig, mango and cherry, and decides on its own when to.
+The rows show in the CLI; the desktop app shows its own agent list instead.
 
 The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentStatusLine` setting. It is display only and costs no tokens.
 

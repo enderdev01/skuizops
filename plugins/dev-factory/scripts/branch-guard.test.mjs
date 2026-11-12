@@ -50,7 +50,7 @@ describe("checkCommand", () => {
   it("allows merging main into a feat/ branch", () => assert.equal(checkCommand("git merge main", onFeat), null));
 });
 
-// Regression cases found by lemon in a real Claude Code session.
+// Regression cases found by the verifier in a real Claude Code session.
 describe("checkCommand bypass regressions", () => {
   const onFeat = "feat/login";
   it("blocks commit on main with git -c options", () =>
