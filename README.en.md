@@ -37,14 +37,26 @@ Then, in each project under `~/DEV`:
 
 Every time the agent wants to do something, the plugin checks it **before** it happens.
 
-```mermaid
-flowchart TD
-  A["The agent wants to run a command or edit a file"] --> B{"Does it break a rule?"}
-  B -->|"Yes"| C["Blocked: it gets the reason, fixes it and retries"]
-  B -->|"No"| D["The action runs"]
-  D --> E{"Does the agent want to finish?"}
-  E -->|"Tests are red"| F["It cannot finish: it gets the error and fixes it"]
-  E -->|"Tests are green"| G["Session ends"]
+```text
+       The agent wants to run a command or edit a file
+                               |
+                               v
+                     Does it break a rule?
+                        |             |
+                       YES            NO
+                        |             |
+                        v             v
+                     BLOCKED        IT RUNS
+               gets the reason,       |
+              fixes and retries       v
+                           Does the agent want to finish?
+                              |                   |
+                          tests red          tests green
+                              |                   |
+                              v                   v
+                        CANNOT FINISH        SESSION ENDS
+                        gets the error
+                         and fixes it
 ```
 
 There are two barriers, one behind the other:
