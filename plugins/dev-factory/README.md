@@ -40,7 +40,13 @@ The plugin installs for your whole user, but its Claude Code hooks (branch guard
 
 ### Trust and protected files
 
-The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, run this yourself from its root:
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/dev-factory/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, use the `/dev-factory:trust` command:
+
+```
+/dev-factory:trust
+```
+
+Type it in a Claude Code session opened in the project. It adds the session's project directory to the list (or the directory you pass, `/dev-factory:trust ~/DEV/other-app`), skips it if it is already there, and prints the list. Only you can run it: the model cannot invoke the command, and the Bash guard blocks agents from running its script. Outside a session, this does the same from the project root:
 
 ```bash
 mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
