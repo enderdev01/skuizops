@@ -2,13 +2,16 @@
 // Exit 2 blocks the stop and feeds the failure back to the agent.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { inScope, projectDir } from "./scope.mjs";
 import { join } from "node:path";
 
 const input = JSON.parse(readFileSync(0, "utf8") || "{}");
 // Already blocked once this turn: let it stop, so a broken environment cannot loop forever.
 if (input.stop_hook_active) process.exit(0);
 
-const cwd = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
+const cwd = projectDir(input);
+// Hooks only act on projects under the configured roots (default ~/DEV).
+if (!inScope(cwd)) process.exit(0);
 
 // Skip when nothing changed (pure Q&A turns). Outside a git repo, always verify.
 const git = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf8" });

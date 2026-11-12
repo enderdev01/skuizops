@@ -9,6 +9,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { inScope, projectDir } from "./scope.mjs";
 
 export const PROTECTED = ["develop", "desarrollo", "desa", "main", "master", "production", "prod", "test", "release"];
 export const WORK_PREFIXES = ["feat/", "fix/", "hotfix/"];
@@ -98,6 +99,8 @@ function main(mode) {
 
   if (mode === "claude") {
     const input = JSON.parse(stdin || "{}");
+    // Outside the configured roots (default ~/DEV) the Claude hook does nothing; installed git hooks still apply.
+    if (!inScope(projectDir(input))) return;
     const command = input.tool_input?.command ?? "";
     const problem = checkCommand(command, currentBranch(input.cwd ?? process.cwd()));
     if (problem) fail(problem);
