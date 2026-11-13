@@ -23,7 +23,7 @@ Keep this file short. A rule belongs here only if no type, lint, test or archite
 | `fig` | Haiku | Read long test, build and lint output |
 | `mango` | Sonnet | Implement a well-specified unit |
 | `lemon` | Session model | Orchestrate: main session, delegates to the others on its own |
-| `cherry` | Opus | Verify a finished change with evidence |
+| `cherry` | Sonnet | Verify a finished change with evidence |
 
 ## Rules
 
