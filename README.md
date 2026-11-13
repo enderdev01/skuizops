@@ -17,11 +17,18 @@ No tiene dependencias (solo Node) y cada revisión tarda unos 50 ms: no se nota.
 
 ## Instalación
 
-```bash
-claude plugin marketplace add enderdev01/la-fruteria
-```
+Dentro del proyecto, un solo comando:
 
 ```bash
+npx github:enderdev01/la-fruteria
+```
+
+Instala o actualiza el marketplace y el plugin, instala los hooks de git (si editaste alguno, guarda una copia `.local-<fecha>` antes de reemplazarlo), te pregunta si confías en el proyecto y reabre Claude Code con un saludo.
+
+Manual (si prefieres):
+
+```bash
+claude plugin marketplace add enderdev01/la-fruteria
 claude plugin install dev-factory@factory-marketplace
 ```
 

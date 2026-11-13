@@ -7,7 +7,7 @@ Exercise: `node scripts/control.mjs verify` runs `install-hooks.test.mjs` and `p
 | Input | Expected |
 |---|---|
 | A git repo | One line per file, then `Hooks installed in: <root>`; hooks executable, guards identical to the plugin's |
-| A second run | Succeeds, overwrites the copies, leaves other files in the two directories alone |
+| A second run | Succeeds; unchanged files are "up to date", files the plugin wrote are updated, a file you edited is copied to `<file>.local-<timestamp>` first (manifest `.githooks/.dev-factory.json`); other files are left alone |
 | A repo whose hooks path was `.husky` | Output says the previous path was replaced |
 | A subdirectory of a repo | Installs in the git root |
 | A directory outside git | Exit 1, `not inside a git repository` |

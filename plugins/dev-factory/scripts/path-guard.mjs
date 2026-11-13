@@ -61,6 +61,8 @@ const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "r
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory|\btrust\.mjs\b/i;
 // The script the human-only /dev-factory:install-hooks command runs.
 const MENTIONS_INSTALL_HOOKS = /\binstall-hooks\.mjs\b/i;
+// The one-command setup (bin/setup.mjs, run through npx) is human-only too.
+const MENTIONS_SETUP = (c) => /\bbin\/setup\.mjs\b|\bdev-factory-setup\b/i.test(c) || (/\bnpx\b/.test(c) && /enderdev01\/la-fruteria/i.test(c));
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
@@ -218,6 +220,7 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
   if (MENTIONS_TRUST_LIST.test(unquote(command)) && !onlyReads) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /dev-factory:install-hooks.";
+  if (MENTIONS_SETUP(unquote(command)) && !onlyReads) return "Only the human runs the setup. Ask them to run: npx github:enderdev01/la-fruteria";
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
