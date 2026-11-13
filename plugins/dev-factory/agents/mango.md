@@ -13,7 +13,7 @@ You receive a spec with: the files you may touch, the acceptance criteria, and t
 2. Read the files and the pattern first. Copy the pattern; do not invent a new one.
 3. Write the failing test first when a test runner applies, then make it pass.
 4. Run `node scripts/control.mjs verify` (or the project's verify command) and fix every failure.
-5. Touch only the files you were given. If the spec is wrong or incomplete, stop and say what is missing.
+5. Touch only the files you were given. If the spec is wrong or incomplete, stop and say what is missing. Other agents may be editing the same tree: never run tree-wide git commands (`stash`, `checkout .`, `restore .`, `reset`, `clean`); for a baseline, use a `git worktree add "$(mktemp -d)"` copy.
 6. Commit only on a `feat/`, `fix/` or `hotfix/` branch. Never commit or push to a protected branch (see AGENTS.md).
 7. Commits are authored by the human only: never add `Co-Authored-By` AI trailers or "Generated with" footers to commits or PRs.
 
