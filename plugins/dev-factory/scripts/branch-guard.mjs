@@ -8,6 +8,7 @@
 //   node branch-guard.mjs pre-push     git pre-push hook, reads "<local ref> <sha> <remote ref> <sha>" lines
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { isAbsolute, normalize } from "node:path";
 import { inScope, isMain, projectDir } from "./scope.mjs";
 
 export const PROTECTED = ["develop", "desarrollo", "desa", "main", "master", "production", "prod", "test", "release"];
@@ -47,8 +48,43 @@ function parseGit(words) {
   return { sub: words[i], rest: words.slice(i + 1) };
 }
 
+// A `gh` call whose only quoted text is inert data (no `$`, backtick, `;`, `|`...) cannot run git, so its
+// text (e.g. an issue body that mentions `git commit`) is not inspected. `gh alias`/`extension` can run shell.
+const GH_DATA = /"\$\(cat <<'(\w+)'\n([\s\S]*?)\n\1\n\)"|"(?:\\.|[^"\\$`])*"|'[^']*'/g;
+export function isPlainGhCall(command) {
+  if (!/^gh\s/.test(command) || /^gh\s+(alias|extension)\b/.test(command)) return false;
+  // A body line equal to the delimiter would end the heredoc early and run the rest: keep the `$` so it is rejected.
+  const rest = command.replace(GH_DATA, (m, tag, body) => (tag && body.split("\n").includes(tag) ? m : ""));
+  return !/[;&|<>(){}$`\\#"'\n]/.test(rest);
+}
+
+// Directory the command's git runs in, or null (= the session branch). Only two strict shapes are trusted:
+// `cd <path> && git ...` and a single `git -C <path> ...`; everything else could hide a second cd.
+const PATH_RE = /^(\/|\.\/|\.\.\/|\.\.$|\.$)[\w./@+-]*$/;
+const DIR_OPTION = /^(-C|-c|--git-dir|--work-tree)/;
+export function targetDir(command) {
+  if (/[$`\\\n]/.test(command)) return null;
+  const bare = command.replace(/"[^"]*"|'[^']*'/g, "");
+  if (/[;|<>(){}#!"']/.test(bare) || /&/.test(bare.replace(/&&/g, ""))) return null;
+  const parts = command.split("&&").map((p) => p.trim());
+  const words = (p) => p.replace(/["']/g, "").split(/\s+/);
+  if (parts.length === 1) {
+    const m = /^git\s+-C\s+(\S+)(\s.*)?$/.exec(parts[0]);
+    if (!m || !PATH_RE.test(m[1])) return null;
+    const rest = words(m[2] ?? "").filter(Boolean);
+    for (let i = 0; i < rest.length && rest[i].startsWith("-"); i += GIT_OPTIONS_WITH_VALUE.includes(rest[i]) ? 2 : 1) {
+      if (DIR_OPTION.test(rest[i])) return null;
+    }
+    return m[1]; // raw: `git -C` follows symlinks physically, so `..` must not be folded here
+  }
+  const cd = /^cd\s+(\S+)$/.exec(parts[0]);
+  if (!cd || !PATH_RE.test(cd[1])) return null;
+  const ok = parts.slice(1).every((p) => /^git(\s|$)/.test(p) && !words(p).some((w) => DIR_OPTION.test(w)));
+  return ok ? normalize(cd[1]) : null;
+}
+
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
-export function checkCommand(command, currentBranch) {
+export function checkCommand(command, currentBranch, branchAt = () => null) {
   if (!/\bgit\b/.test(command)) return null;
   // git accepts any unambiguous prefix of a long option, so `--no-verif` is `--no-verify`.
   if (/(^|[\s"'])--no-v/.test(command)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
@@ -58,9 +94,16 @@ export function checkCommand(command, currentBranch) {
   const withoutSetup = command.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
 
+  if (isPlainGhCall(command)) return null;
+
   // Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
-  // each segment is inspected, so the text of a commit message is not read as a second command.
+  // each segment is inspected. The target dir is honored only for `cd <path> && git ...` or a single
+  // `git -C <path> ...`; anything else is judged by the session branch.
   // Redirections are removed first: `2>&1` and `> file` are not refspecs.
+  const branch = () => {
+    const dir = targetDir(command);
+    return dir === null ? currentBranch : branchAt(dir);
+  };
   for (const segment of command.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/)) {
     const words = segment.trim().split(/\s+/);
     const gitAt = words.findIndex((w) => w === "git" || w.endsWith("/git"));
@@ -76,7 +119,7 @@ export function checkCommand(command, currentBranch) {
       return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
     }
     if (["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset"].includes(sub)) {
-      const problem = commitViolation(currentBranch);
+      const problem = commitViolation(branch());
       if (problem) return `git ${sub} blocked: ${problem}`;
     }
     // Plumbing and forced branch moves change a ref without running any hook.
@@ -93,9 +136,9 @@ export function checkCommand(command, currentBranch) {
     if (sub === "push") {
       if (/\s--(all|mirror)\b/.test(segment)) return "git push --all/--mirror is forbidden.";
       const refspecs = args.slice(2); // after "push <remote>"
-      const targets = refspecs.length ? refspecs.map((r) => r.replace(/^\+/, "").split(":").pop()) : [currentBranch ?? ""];
+      const targets = refspecs.length ? refspecs.map((r) => r.replace(/^\+/, "").split(":").pop()) : [branch() ?? ""];
       for (const target of targets) {
-        const problem = pushViolation(target === "HEAD" ? (currentBranch ?? "") : target);
+        const problem = pushViolation(target === "HEAD" ? (branch() ?? "") : target);
         if (problem) return `git push blocked: ${problem}`;
       }
     }
@@ -121,7 +164,8 @@ function main(mode) {
     // Outside the scope roots (~/DEV plus DEV_FACTORY_ROOTS) the Claude hook does nothing; installed git hooks still apply.
     if (!inScope(projectDir(input))) return;
     const command = input.tool_input?.command ?? "";
-    const problem = checkCommand(command, currentBranch(input.cwd ?? process.cwd()));
+    const cwd = input.cwd ?? process.cwd();
+    const problem = checkCommand(command, currentBranch(cwd), (d) => currentBranch(isAbsolute(d) ? d : cwd + "/" + d));
     if (problem) fail(problem);
     return;
   }

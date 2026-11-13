@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { checkCommand, commitViolation, isProtected, pushViolation } from "./branch-guard.mjs";
+import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation, targetDir } from "./branch-guard.mjs";
 
 describe("isProtected", () => {
   for (const ref of ["develop", "desarrollo", "desa", "main", "master", "production", "prod", "test", "release", "release/1.2", "refs/heads/main", "MAIN"]) {
@@ -134,5 +134,60 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
   it("still enforces the branch policy and allows the setup step", () => {
     assert.match(checkCommand('git commit -m "x"', "main"), /protected/);
     assert.equal(checkCommand("git config core.hooksPath .githooks", "feat/x"), null);
+  });
+
+  describe("target dir and quoted text", () => {
+    const at = (d) => ({ "../wt": "fix/x", "../repo": "develop" })[d] ?? null;
+    const run = (cmd, branch) => checkCommand(cmd, branch, at);
+    const S = "develop";
+    const onFeat = "feat/login";
+    for (const cmd of [
+      'git -C ../wt commit -m "fix: x"',
+      `cd ../wt && git add . && git commit -m "fix: it's done"`,
+      "git -C ../wt push -u origin fix/x",
+      "cd ../wt && git push -u origin fix/x",
+    ]) {
+      it(`trusts the target dir: ${JSON.stringify(cmd)}`, () => assert.equal(run(cmd, S), null));
+    }
+    for (const cmd of ["git -C ../repo commit -m x", "cd ../repo && git commit -m x"]) {
+      it(`blocks a protected target dir: ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, onFeat), /blocked/));
+    }
+    it("ignores git inside a plain gh call", () => {
+      assert.equal(run('gh issue create --title "t" --body "run git -C ../wt commit and git commit -m x"', "main"), null);
+      assert.equal(run("gh pr create --title \"t\" --body \"$(cat <<'EOF'\nit's done\ngit commit -m x\ngit push origin main\nEOF\n)\"", "main"), null);
+    });
+    it("does not trust a heredoc body that ends early", () => {
+      assert.equal(isPlainGhCall("gh pr create --body \"$(cat <<'EOF'\nx\nEOF\ngit commit -m x\nEOF\n)\""), false);
+    });
+    const m = "-m x";
+    for (const cmd of [
+      `cd ../wt && { cd ../repo; git commit ${m}; }`,
+      `cd ../wt && pushd ../repo && git commit ${m}`,
+      `cd ../wt && builtin cd ../repo && git commit ${m}`,
+      `cd ../wt && command cd ../repo && git commit ${m}`,
+      `cd ../wt && if true; then cd ../repo; fi; git commit ${m}`,
+      `cd ../wt && eval "cd ../repo" && git commit ${m}`,
+      `cd ../wt && bash -c "cd ../repo; git commit ${m}"`,
+      `cd ../wt && ! cd ../repo; git commit ${m}`,
+      `D=repo; cd ../$D && git commit ${m}`,
+      `D=repo; git -C ../$D commit ${m}`,
+      `bash -c -- "git commit ${m}"`,
+      `bash -c 'git "commit" ${m}'`,
+      `bash -c "$(printf 'git commit ${m}')"`,
+      `echo 'git commit ${m}' | bash`,
+      `bash <<< "git commit ${m}"`,
+      `cat <<EOF | bash\ngit commit ${m}\nEOF`,
+      `env bash <<EOF\ngit commit ${m}\nEOF`,
+      `python3 -c "import os; os.system('git commit ${m}')"`,
+      `echo hi # "\ngit commit ${m}\necho # "`,
+      `echo hi # it's\ngit commit ${m}\necho # that's`,
+      `gh pr create --body "x" ; git commit ${m}`,
+      `gh alias set --shell ci 'git commit ${m}'`,
+      `cd wt && git commit ${m}`,
+      `git -C ../wt -C ../repo commit ${m}`,
+    ]) {
+      it(`blocks bypass: ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, S), /blocked/));
+    }
+    it("returns the -C path unnormalized (symlinks)", () => assert.equal(targetDir("git -C ../wt/lnk/.. commit -m x"), "../wt/lnk/.."));
   });
 });
