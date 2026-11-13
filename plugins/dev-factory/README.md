@@ -28,7 +28,7 @@ Each agent has a color (kiwi green, fig purple, mango orange, cherry red, lemon 
 dev-factory:kiwi(🥝 find auth routes)
 ```
 
-Lemon is not listed there: it is the main session, not a subagent. `create-verification-skill` sets `"agent": "dev-factory:lemon"` in the project's `.claude/settings.json`, so only set-up projects run as lemon. Lemon may delegate only to kiwi, fig, mango and cherry, and decides on its own when to.
+Lemon is not listed there: it is the main session, not a subagent. The setup command (`npx github:enderdev01/la-fruteria`) sets `"agent": "dev-factory:lemon"` in the project's `.claude/settings.json` (keeping your other keys and any agent you already chose), so only set-up projects run as lemon, in new sessions. Lemon may delegate only to kiwi, fig, mango and cherry, and decides on its own when to.
 The rows show in the CLI; the desktop app shows its own agent list instead.
 
 A PreToolUse hook (`scripts/agent-emoji.mjs`) prefixes the fruit emoji to the Agent task description; it is display only.
@@ -67,7 +67,7 @@ mkdir -p .githooks scripts/guard && cp "$PLUGIN"/templates/githooks/* .githooks/
 
 ### Protected paths
 
-Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why `create-verification-skill` hands you the hook and settings steps.
+Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why the setup command (not the agents) does the hook and settings steps.
 
 Shell commands that write to those paths are blocked too: redirections, `rm`, `mv`, `chmod`, `mkdir`, `sed -i`, the destination of `cp`, and `git checkout` or `git restore` of them. Reading them is allowed. This check is best effort: a script, an interpreter or a variable can still write, so the git hooks and your review stay the authoritative layers. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.
 
@@ -85,7 +85,7 @@ Inside your project, run one command:
 npx github:enderdev01/la-fruteria
 ```
 
-It installs or updates the marketplace and the plugin, installs the git hooks (an edited hook is saved as `<file>.local-<date>` before it is replaced), asks whether to trust the project, and relaunches Claude Code with a welcome. Only the human runs it; the path guard blocks agents.
+It installs or updates the marketplace and the plugin, installs the git hooks (an edited hook is saved as `<file>.local-<date>` before it is replaced), trusts the project, sets lemon as the project's agent in `.claude/settings.json` (never overwriting an agent you chose or invalid JSON), installs Playwright and Chromium when it detects a web UI (using the package manager of your lockfile), and relaunches Claude Code with a welcome that says what it configured. `create-verification-skill` asks you to run it when any of that is missing. Only the human runs it; the path guard blocks agents.
 
 Manual:
 

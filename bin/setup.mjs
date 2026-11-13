@@ -2,10 +2,9 @@
 // One-command setup for a human: npx github:enderdev01/la-fruteria
 // Installs or updates the marketplace and plugin, the git hooks and the trust entry, then relaunches Claude Code.
 import { execFile, spawn } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { installHooks } from "../plugins/dev-factory/scripts/install-hooks.mjs";
 import { isMain, isTrusted } from "../plugins/dev-factory/scripts/scope.mjs";
@@ -23,10 +22,56 @@ export const pickMarketplaceAction = (list) => (list.some((m) => m.name === MARK
 export const pickPluginAction = (list) => (list.some((p) => p.id === PLUGIN) ? "update" : "install");
 export const pluginVersion = (list) => list.find((p) => p.id === PLUGIN)?.version ?? null;
 
-export function welcomePrompt({ oldVersion, newVersion, backups = [] }) {
+const LEMON = "dev-factory:lemon";
+const WEB_DEPS = ["vite", "next", "react", "react-dom", "vue", "svelte", "@sveltejs/kit", "nuxt", "astro", "@angular/core", "solid-js", "preact", "@remix-run/react"];
+
+// Sets "agent": "dev-factory:lemon" in <root>/.claude/settings.json without ever overwriting what the user has.
+export function setLemonAgent(root) {
+  const file = join(root, ".claude", "settings.json");
+  let settings = {};
+  if (existsSync(file)) {
+    try {
+      settings = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      settings = null;
+    }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return { status: "fail", message: "fix .claude/settings.json (invalid JSON) and re-run" };
+    if (settings.agent === LEMON) return { status: "skip", message: "already set" };
+    if (settings.agent !== undefined) return { status: "skip", message: `kept your agent ${settings.agent}` };
+  }
+  mkdirSync(join(root, ".claude"), { recursive: true });
+  writeFileSync(file, `${JSON.stringify({ ...settings, agent: LEMON }, null, 2)}\n`);
+  return { status: "ok", message: "set" };
+}
+
+const readPackage = (root) => {
+  try {
+    return JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
+};
+export const hasWebUi = (pkg) => WEB_DEPS.some((d) => d in { ...pkg?.dependencies, ...pkg?.devDependencies });
+export const hasPlaywright = (pkg) => "playwright" in { ...pkg?.dependencies, ...pkg?.devDependencies };
+// Package manager by lockfile (files: names present in the project root) -> [command, ...args] that adds playwright as a dev dependency.
+export function playwrightInstallCommand(files) {
+  const has = (f) => files.includes(f);
+  if (has("pnpm-lock.yaml")) return ["pnpm", "add", "-D", "playwright"];
+  if (has("yarn.lock")) return ["yarn", "add", "-D", "playwright"];
+  if (has("bun.lock") || has("bun.lockb")) return ["bun", "add", "-d", "playwright"];
+  return ["npm", "install", "-D", "playwright"];
+}
+
+export const firstErrorLine = (text) => {
+  const lines = String(text).split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.find((l) => /error|ERR!|failed/i.test(l)) ?? lines[0] ?? "install failed";
+};
+
+export function welcomePrompt({ oldVersion, newVersion, backups = [], configured = [] }) {
   const what = !oldVersion ? `installed v${newVersion}` : oldVersion !== newVersion ? `updated from v${oldVersion} to v${newVersion}` : `confirmed up to date at v${newVersion}`;
   const saved = backups.length ? ` These files had local edits and were backed up before being replaced: ${backups.join(", ")}. Tell the user where the backups are.` : "";
-  return `dev-factory was just ${what} in this project by the setup command.${saved} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill. Do not run any command.`;
+  const conf = configured.length ? ` The setup also did this: ${configured.join("; ")}. Mention it in one line. Settings changed, so the lemon orchestrator applies to NEW sessions, not this one: tell the user to open a new session to get it.` : "";
+  return `dev-factory was just ${what} in this project by the setup command.${saved}${conf} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill. Do not run any command.`;
 }
 
 export function hasSession(cwd, home = homedir()) {
@@ -49,7 +94,7 @@ const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const MARK = { ok: green("✓"), skip: yellow("•"), fail: red("✗") };
 const out = (s) => process.stdout.write(`${s}\n`);
 
-// fn(ui) returns { status: "ok" | "skip", text?, details? } or throws. ui.pause() stops the spinner (before asking something).
+// fn(ui) returns { status: "ok" | "skip", text?, details? } or throws. 
 async function step(label, fn) {
   let timer;
   let i = 0;
@@ -88,7 +133,7 @@ async function main() {
   const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   out(`\n${paint("1;35", "dev-factory")} ${dim(`v${version}`)}\n`);
   const cwd = process.cwd();
-  const env = { oldVersion: null, newVersion: null, backups: [] };
+  const env = { oldVersion: null, newVersion: null, backups: [], configured: [] };
   let failed = false;
   const track = (r) => (failed ||= r.status === "fail");
 
@@ -128,16 +173,35 @@ async function main() {
   }));
 
   const project = root ?? cwd;
-  track(await step("Trust", async ({ pause }) => {
+  track(await step("Trust", async () => {
     if (isTrusted(project)) return { status: "skip", text: "already trusted" };
-    if (!process.stdin.isTTY) return { status: "skip", text: "not asked (no terminal)" };
-    pause();
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await rl.question("Trust this project so dev-factory runs its tests? [y/N] ");
-    rl.close();
-    if (!/^y(es)?$/i.test(answer.trim())) return { status: "skip", text: "not trusted" };
     trust(project);
-    return { status: "ok", text: "trusted" };
+    env.configured.push("trusted the project");
+    return { status: "ok", text: `trusted ${project}` };
+  }));
+
+  track(await step("Lemon orchestrator", async () => {
+    const r = setLemonAgent(project);
+    if (r.status === "fail") throw new Error(r.message);
+    env.configured.push(r.status === "ok" ? "set lemon as the default agent in .claude/settings.json" : `lemon: ${r.message}`);
+    return { status: r.status, text: r.message };
+  }));
+
+  track(await step("Playwright", async () => {
+    const pkg = readPackage(project);
+    if (!hasWebUi(pkg)) return { status: "skip", text: "no web UI detected" };
+    const had = hasPlaywright(pkg);
+    try {
+      if (!had) {
+        const [cmd, ...cmdArgs] = playwrightInstallCommand(readdirSync(project));
+        await run(cmd, cmdArgs, { cwd: project, maxBuffer: 1 << 24 });
+      }
+      await run("npx", ["playwright", "install", "chromium"], { cwd: project, maxBuffer: 1 << 24 });
+    } catch (error) {
+      throw new Error(firstErrorLine(error.stderr || error.message));
+    }
+    env.configured.push(had ? "Playwright was already installed" : "installed Playwright and Chromium");
+    return had ? { status: "skip", text: "already installed" } : { status: "ok", text: "installed" };
   }));
 
   out("");

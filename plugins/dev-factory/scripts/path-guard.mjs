@@ -61,8 +61,21 @@ const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "r
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory|\btrust\.mjs\b/i;
 // The script the human-only /dev-factory:install-hooks command runs.
 const MENTIONS_INSTALL_HOOKS = /\binstall-hooks\.mjs\b/i;
-// The one-command setup (bin/setup.mjs, run through npx) is human-only too.
-const MENTIONS_SETUP = (c) => /\bbin\/setup\.mjs\b|\bdev-factory-setup\b/i.test(c) || (/\bnpx\b/.test(c) && /enderdev01\/la-fruteria/i.test(c));
+// The one-command setup is human-only: only a segment that EXECUTES it is blocked (mentioning it is fine).
+const SETUP_TARGET = /enderdev01\/la-fruteria|dev-factory-setup/i;
+const SETUP_SCRIPT = /(^|\/)bin\/setup\.mjs$/;
+function runsSetup(words, depth = 0) {
+  const [cmd = "", ...args] = commandWords(words);
+  const name = basename(cmd);
+  // A nested shell (`bash -c "..."`, `eval ...`): run the same check on its script. shortcut: quotes are already dropped, so the script is the re-joined args, deeper than 3 levels is not followed.
+  const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
+  const script = name === "eval" ? args : ["bash", "sh", "zsh", "dash", "ksh"].includes(name) && c >= 0 ? args.slice(c + 1) : null;
+  if (script && depth < 3) return script.join(" ").split(/\n|;|&|\||\(|\)|`/).some((s) => runsSetup(s.trim().split(/\s+/), depth + 1));
+  if (["npx", "bunx", "pnpx"].includes(name)) return args.some((a) => SETUP_TARGET.test(a));
+  if (["npm", "pnpm", "yarn"].includes(name) && args.some((a) => ["exec", "dlx", "x"].includes(a))) return args.some((a) => SETUP_TARGET.test(a));
+  if (["node", "bun", "deno", "bash", "sh", "zsh"].includes(name)) return args.some((a) => SETUP_SCRIPT.test(a));
+  return SETUP_SCRIPT.test(cmd) || name === "dev-factory-setup";
+}
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
@@ -129,7 +142,7 @@ function takeSubstitutions(s, inner = []) {
 function commandWords(words) {
   // The shell drops quotes and backslashes: `\rm` and 'rm' are rm. Words that were only quotes are empty: drop them.
   words = words.map(unquote).filter(Boolean);
-  while (/^\w+=/.test(words[0] ?? "") || ["sudo", "command", "env", "exec", "nohup", "time", "xargs", "{", "!", "then", "do", "else"].includes(words[0])) words = words.slice(1);
+  while (/^\w+=/.test(words[0] ?? "") || ["sudo", "command", "env", "exec", "nohup", "time", "xargs", "{", "!", "then", "do", "else"].includes(basename(words[0] ?? ""))) words = words.slice(1); // basename: `/usr/bin/env node` is env
   return words;
 }
 
@@ -220,7 +233,6 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
   if (MENTIONS_TRUST_LIST.test(unquote(command)) && !onlyReads) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /dev-factory:install-hooks.";
-  if (MENTIONS_SETUP(unquote(command)) && !onlyReads) return "Only the human runs the setup. Ask them to run: npx github:enderdev01/la-fruteria";
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
@@ -232,6 +244,7 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   for (const segment of segments) {
     const redirects = [...segment.matchAll(/\d*>>?\|?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
     const words = unhide(segment.replace(/\d*>>?\|?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
+    if (runsSetup(words)) return "Only the human runs the setup. Ask them to run: npx github:enderdev01/la-fruteria";
     if (["cd", "pushd"].includes(words[0])) here = dirOf(words[1] ?? "~", here);
     const git = gitCall(words);
     const base = git ? git.dirs.reduce((dir, d) => dirOf(d, dir), here) : here;

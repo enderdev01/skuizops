@@ -65,10 +65,11 @@ function doctor() {
 }
 
 function verify() {
-  const files = [...mjsFiles("plugins"), ...mjsFiles("scripts")];
+  const files = [...mjsFiles("plugins"), ...mjsFiles("scripts"), ...mjsFiles("bin")];
   const syntax = files.map((f) => run("node", ["--check", f]));
   const steps = [
     { step: "plugin tests", ...run("node", ["--test", "plugins/dev-factory/scripts/"]) },
+    { step: "bin tests", ...run("node", ["--test", "bin/"]) },
     { step: "validate marketplace", ...run("claude", ["plugin", "validate", root]) },
     { step: "validate plugin", ...run("claude", ["plugin", "validate", join(root, "plugins", "dev-factory")]) },
     {
