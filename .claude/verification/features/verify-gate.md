@@ -11,7 +11,7 @@ Exercise: `node scripts/control.mjs verify` runs `verify-gate.test.mjs`; all 10 
 | Verify times out | Blocks and reports the timeout |
 | `stop_hook_active` set and verify fails | Still verifies, warns with a `systemMessage`, exit 0 (no loop) |
 | Clean pass on a clean tree | Records HEAD; the next stop on the same HEAD skips verify |
-| Dirty tree | Verifies and does not record HEAD |
+| Dirty tree | Verifies once and records a hash of HEAD, the diff and the untracked files; the next stop skips until a tracked or untracked file changes |
 
 ## Edge cases
 
