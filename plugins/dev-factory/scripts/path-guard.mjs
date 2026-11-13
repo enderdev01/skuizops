@@ -2,7 +2,7 @@
 //   node path-guard.mjs        (Edit|Write|NotebookEdit) checks the target file
 //   node path-guard.mjs bash   (Bash) checks the shell command, best effort
 // Protected anywhere: the dev-factory config dir (trust list), the installed plugins, the user's
-// Claude settings, git config and shell profiles.
+// Claude settings, git config and shell profiles; a directory-marketplace source repo, unless the session is opened in it.
 // Protected under the scope roots (~/DEV): any .githooks/, scripts/guard/ or .git/ path and any
 // .claude/settings*.json, in any project.
 // The human edits these by hand.
@@ -17,6 +17,16 @@ export function editViolation(file, project, env = process.env) {
   const target = fold(resolve(project ?? "", file));
   if (under(target, fold(dirname(trustFile(env))))) return "the dev-factory config (trusted-projects list) is edited by the human only.";
   if (under(target, fold(join(env.HOME ?? "", ".claude", "plugins")))) return "installed plugins are changed by the human only.";
+  const marketplaces = (() => {
+    try { return Object.values(JSON.parse(readFileSync(join(env.HOME ?? "", ".claude", "plugins", "known_marketplaces.json"), "utf8"))); } catch { return []; }
+  })();
+  for (const m of marketplaces) {
+    const path = m?.source?.source === "directory" ? (m.source.path ?? m.installLocation) : null;
+    if (typeof path !== "string" || !path || !under(target, fold(path))) continue;
+    if (!project || !under(fold(project), fold(path))) {
+      return `${file} is the source of an installed plugin marketplace (${path}). Edit it only from a session opened in that repo.`;
+    }
+  }
   const homeFiles = [[".claude", "settings.json"], [".claude", "settings.local.json"], [".gitconfig"], ...PROFILES.map((p) => [p])];
   const home = (...parts) => fold(join(env.HOME ?? "", ...parts));
   if (homeFiles.some((parts) => target === home(...parts)) || under(target, home(".config", "git"))) {
@@ -36,53 +46,163 @@ export function editViolation(file, project, env = process.env) {
 }
 
 const WRITES_ALL_ARGS = ["rm", "rmdir", "mv", "tee", "touch", "chmod", "chown", "chflags", "truncate", "unlink", "mkdir", "ln"];
-const GIT_WRITES = ["checkout", "restore", "rm", "mv", "clean", "apply", "stash"];
+const GIT_WRITES = ["checkout", "restore", "rm", "mv", "clean", "apply", "stash", "reset", "switch"];
+// Subcommands that rewrite a whole tree: the directory git runs in is what gets written.
+const GIT_TREE_WIDE = ["stash", "clean", "reset", "checkout", "restore", "switch"];
+// Subcommands that change the tree or refs: cherry may not run them on the live project.
+const GIT_MUTATES = ["stash", "checkout", "switch", "restore", "reset", "clean", "apply", "commit", "add", "rm", "mv", "merge", "rebase", "cherry-pick", "revert", "am", "pull", "update-index", "update-ref"];
+// `git tag` / `git branch` list unless an option or a bare name creates, deletes or moves a ref.
+const REF_WRITE_OPTS = { tag: /^-[a-zA-Z]*[dfasumF]|^--(delete|force|annotate|sign|local-user|message|file)/, branch: /^-[a-zA-Z]*[dDfmMcCu]|^--(delete|force|move|copy|set-upstream-to|unset-upstream)/ };
+const REF_LIST_OPTS = /^(-l|--list|--contains|--points-at|--merged|--no-merged|--show-current|--verify)$/;
+const CHERRY_MSG = 'cherry is read-only on the project: reproduce or mutate in a copy (git worktree add "$(mktemp -d)" or cp -R into a mktemp dir), never the live tree.';
 const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "rg", "diff"];
 // The list itself, its directory, or the script the human-only /dev-factory:trust command runs.
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory|\btrust\.mjs\b/i;
 
+const unquote = (w) => w.replace(/["'\\]/g, "");
+// shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
+const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST)\b/.test(unquote(w));
+const subst = (w) => /^\$SUBST/.test(unquote(w));
+
+// `>` inside quotes is text, not a redirect: hide it (\u0001) until the words are read. `$(...)` inside "..." stays code.
+function hideQuotedRedirects(s) {
+  let out = "", q = null, depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "\\" && q !== "'") { out += c + (s[i + 1] ?? ""); i++; continue; }
+    if (!q) { if (c === "'" || c === '"') q = c; out += c; continue; }
+    if (q === "'") { if (c === "'") q = null; out += c === ">" ? "\u0001" : c; continue; }
+    if (depth) { if (c === "(") depth++; else if (c === ")") depth--; out += c; continue; }
+    if (c === "$" && s[i + 1] === "(") { depth = 1; out += "$("; i++; continue; }
+    if (c === '"') q = null;
+    out += c === ">" ? "\u0001" : c;
+  }
+  return out;
+}
+
+// Each `$(...)` becomes one word in its segment (`$MKTEMP` for mktemp, else `$SUBST`); its inner command is returned as its own segment.
+function takeSubstitutions(s, inner = []) {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "$" || s[i + 1] !== "(") { out += s[i]; continue; }
+    let depth = 1, j = i + 2;
+    while (j < s.length && depth) { if (s[j] === "(") depth++; else if (s[j] === ")") depth--; j++; }
+    const body = s.slice(i + 2, depth ? j : j - 1);
+    inner.push(takeSubstitutions(body, inner));
+    out += /^\s*mktemp\b/.test(body) ? "$MKTEMP" : "$SUBST";
+    i = j - 1;
+  }
+  return out;
+}
+
+// The words of a segment without quotes, `VAR=value` prefixes and words that run the next word as the command.
+function commandWords(words) {
+  // The shell drops quotes and backslashes: `\rm` and 'rm' are rm. Words that were only quotes are empty: drop them.
+  words = words.map(unquote).filter(Boolean);
+  while (/^\w+=/.test(words[0] ?? "") || ["sudo", "command", "env", "exec", "nohup", "time", "xargs", "{", "!", "then", "do", "else"].includes(words[0])) words = words.slice(1);
+  return words;
+}
+
+// The git subcommand, what follows it and the `-C` directories, or null when the segment is not git.
+function gitCall(words) {
+  const [cmd, ...args] = commandWords(words);
+  if (basename(cmd ?? "") !== "git") return null;
+  const dirs = [];
+  let i = 0;
+  while (i < args.length && args[i].startsWith("-")) {
+    // --work-tree / --git-dir (the parent of a /.git) move git's tree like -C does.
+    const [, name, glued] = /^(-C|--work-tree|--git-dir)(?:=(.*))?$/.exec(args[i]) ?? [];
+    const value = glued ?? (name ? args[i + 1] : undefined);
+    if (value) {
+      if (name !== "--git-dir") dirs.push(value);
+      else if (/(^|\/)\.git$/.test(value)) dirs.push(value.slice(0, -4) || ".");
+    }
+    i += ["-c", "-C", "--work-tree", "--git-dir"].includes(args[i]) ? 2 : 1;
+  }
+  return { sub: args[i], rest: args.slice(i + 1), dirs };
+}
+
+const stashReads = (git) => git.sub === "stash" && ["list", "show"].includes(git.rest[0]);
+
+function gitMutates(git) {
+  const { sub, rest } = git;
+  if (sub === "stash") return !stashReads(git);
+  if (sub === "worktree") return rest[0] === "remove";
+  if (Object.hasOwn(REF_WRITE_OPTS, sub)) {
+    const listing = rest.some((a) => REF_LIST_OPTS.test(a));
+    return rest.some((a) => REF_WRITE_OPTS[sub].test(a)) || (!listing && rest.some((a) => !a.startsWith("-")));
+  }
+  return GIT_MUTATES.includes(sub);
+}
+
+// The file operands of sed/perl: the script (first operand, or the argument of -e/-f) is not written.
+// The script may be glued to its option (-es/a/b/, --expression=X, perl -pe'..'): then every operand is a file.
+function scriptFiles(args, name) {
+  const files = [];
+  let script = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (/^--(expression|file)=/.test(a)) script = true;
+    else if (/^--(expression|file)$/.test(a)) { script = true; i++; }
+    else if (a.startsWith("--")) continue;
+    else if (a.startsWith("-") && a.length > 1) {
+      // sed: a script option ends a cluster of flags; perl: the first e/E in the cluster takes the rest (i takes a suffix, M/I/... a module or path).
+      const m = name === "sed" ? /^-[nsuzEr]*[ef](.*)$/.exec(a) : /^-[^eEiMmIFxCdDV]*[eE](.*)$/.exec(a);
+      if (m) { script = true; if (!m[1]) i++; }
+    } else files.push(a);
+  }
+  return script ? files : files.slice(1);
+}
+
 // Paths a single command segment writes to, as raw words (quotes and `~` not yet resolved).
 function writtenWords(words) {
-  // The shell drops quotes and backslashes: `\rm` and 'rm' are rm.
-  words = words.map((w) => w.replace(/["'\\]/g, ""));
-  // Skip `VAR=value` prefixes and words that run the next word as the command.
-  while (/^\w+=/.test(words[0] ?? "") || ["sudo", "command", "env", "exec", "nohup", "time", "xargs", "{", "!", "then", "do", "else"].includes(words[0])) words = words.slice(1);
-  const [cmd, ...args] = words;
+  const [cmd, ...args] = commandWords(words);
   const name = basename(cmd ?? "");
   const operands = (list) => list.filter((w) => !w.startsWith("-"));
   if (WRITES_ALL_ARGS.includes(name)) return operands(args);
-  if ((name === "sed" || name === "perl") && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return operands(args);
+  if ((name === "sed" || name === "perl") && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return scriptFiles(args, name);
   if (name === "dd") return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
   if (["cp", "rsync", "install"].includes(name)) return operands(args).slice(-1);
-  if (name === "git") {
-    let i = 0;
-    while (i < args.length && args[i].startsWith("-")) i += ["-c", "-C"].includes(args[i]) ? 2 : 1;
-    if (GIT_WRITES.includes(args[i])) return operands(args.slice(i + 1));
-  }
+  const git = gitCall(words);
+  if (git && GIT_WRITES.includes(git.sub) && !stashReads(git)) return [...operands(git.rest), ...(GIT_TREE_WIDE.includes(git.sub) ? ["."] : [])];
   return [];
 }
 
 // Best effort: a shell command that writes to a path editViolation protects, or mentions the trust list
 // without being read-only. Interpreters, variables and indirection can still write.
-export function commandViolation(command, { project, cwd, env = process.env } = {}) {
-  // `>|` and `>&` are redirections too: make them `>` so the split below does not cut them from their target.
-  const segments = command.replace(/>[|&]/g, ">").split(/\n|;|&|\||\(|\)|`|\$\(/);
+// readOnly (cherry): nothing under the project changes and git does not touch the tree or refs.
+export function commandViolation(command, { project, cwd, env = process.env, readOnly = false } = {}) {
+  readOnly = readOnly && inScope(project, env);
+  const flat = hideQuotedRedirects(command)
+    .replace(/\d*>&(\d+|-)(?![^\s;&|)<>])/g, " ") // `2>&1`, `>&-`: fd duplication, not a file
+    .replace(/&>>?|>[|&]/g, ">"); // `&>`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
+  const inner = [];
+  const text = takeSubstitutions(flat, inner);
+  const segments = [text, ...inner].join("\n").split(/\n|;|&|\||\(|\)|`/);
   // The shell drops quotes and backslashes, so `tru"st".mjs` is trust.mjs: match with them removed.
-  if (MENTIONS_TRUST_LIST.test(command.replace(/["'\\]/g, ""))) {
+  if (MENTIONS_TRUST_LIST.test(unquote(command))) {
     const readOnly = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
     if (!readOnly) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   }
   let here = cwd ?? process.cwd();
-  const clean = (word) => {
-    const w = word.replace(/["'\\]/g, "").replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "");
-    return /[*?[]/.test(w) ? globSync(w, { cwd: here }).map((m) => resolve(here, m)).concat(resolve(here, w)) : [resolve(here, w)];
+  const clean = (word, from = here) => {
+    // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
+    const w = unquote(word).replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here);
+    return /[*?[]/.test(w) ? globSync(w, { cwd: from }).map((m) => resolve(from, m)).concat(resolve(from, w)) : [resolve(from, w)];
   };
+  const dirOf = (word, from) => (unknownVar(word) ? resolve("/", unquote(word)) : clean(word, from)[0]);
+  const unhide = (s) => s.replaceAll("\u0001", ">");
   for (const segment of segments) {
-    const redirects = [...segment.matchAll(/\d*>>?\|?\s*([^\s<>]+)/g)].map((m) => m[1]);
-    const words = segment.replace(/\d*>>?\|?\s*[^\s<>]*/g, " ").trim().split(/\s+/).filter(Boolean);
-    if (["cd", "pushd"].includes(words[0])) here = clean(words[1] ?? "~")[0];
-    for (const word of [...redirects, ...writtenWords(words)]) {
-      for (const path of clean(word)) {
+    const redirects = [...segment.matchAll(/\d*>>?\|?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
+    const words = unhide(segment.replace(/\d*>>?\|?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
+    if (["cd", "pushd"].includes(words[0])) here = dirOf(words[1] ?? "~", here);
+    const git = gitCall(words);
+    const base = git ? git.dirs.reduce((dir, d) => dirOf(d, dir), here) : here;
+    if (readOnly && git && under(fold(base), fold(project)) && gitMutates(git)) return CHERRY_MSG;
+    for (const [word, from] of [...redirects.map((w) => [w, here]), ...writtenWords(words).map((w) => [w, base])]) {
+      if (!unquote(word) || (readOnly ? unknownVar(word) : subst(word))) continue;
+      for (const path of clean(word, from)) {
+        if (readOnly && under(fold(path), fold(project))) return CHERRY_MSG;
         const problem = editViolation(path, project, env);
         if (problem) return problem;
       }
@@ -95,7 +215,7 @@ if (isMain(import.meta.url)) {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   const bash = process.argv[2] === "bash";
   const problem = bash
-    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd() })
+    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: input.agent_type?.split(":").pop() === "cherry" })
     : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, projectDir(input));
   if (problem) {
     process.stderr.write(`dev-factory: ${problem}\n`);

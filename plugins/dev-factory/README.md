@@ -22,17 +22,16 @@ The commit-msg guard rejects any `<something>-by:` trailer that names an AI tool
 
 ## What you see
 
-Each agent has a color (kiwi green, fig purple, mango orange, cherry red, lemon yellow), and while one runs the agent panel shows a row like:
+Each agent has a color (kiwi green, fig purple, mango orange, cherry red, lemon yellow), and while one runs Claude Code draws its agent row and the hook prefixes the emoji to the task description:
 
 ```
-🥝 kiwi · find auth routes · haiku · 12k tok
-🍒 cherry · verify with control.mjs · opus · 48k tok ✓
+dev-factory:kiwi(🥝 find auth routes)
 ```
 
 Lemon is not listed there: it is the main session, not a subagent. `create-verification-skill` sets `"agent": "dev-factory:lemon"` in the project's `.claude/settings.json`, so only set-up projects run as lemon. Lemon may delegate only to kiwi, fig, mango and cherry, and decides on its own when to.
 The rows show in the CLI; the desktop app shows its own agent list instead.
 
-The row is drawn by `scripts/subagent-row.mjs` through the plugin's `subagentStatusLine` setting. It is display only and costs no tokens.
+A PreToolUse hook (`scripts/agent-emoji.mjs`) prefixes the fruit emoji to the Agent task description; it is display only.
 
 ## Scope
 
