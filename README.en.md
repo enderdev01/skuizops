@@ -1,10 +1,38 @@
-# la-fruteria
+<h1 align="center">🍋 la-fruteria</h1>
 
-[Español](README.md) · **English**
+<h3 align="center">Five fruits work your code. Nothing rotten reaches <code>main</code>.</h3>
 
-A Claude Code marketplace with a single plugin: `dev-factory`.
+<p align="center">
+  A team of agents for Claude Code:<br>
+  🍋 <b>lemon</b> organizes · 🥝 <b>kiwi</b> searches · 🫐 <b>fig</b> reads the logs · 🥭 <b>mango</b> builds · 🍒 <b>cherry</b> verifies<br>
+  Each task goes to the cheapest model that can do it, and no shortcut gets through: no commits on <code>main</code>, no red tests.
+</p>
 
-**What it does, in one sentence:** it stops an AI agent from breaking the team's rules, even when it tries.
+<p align="center">
+  <img src="https://img.shields.io/badge/Claude%20Code-plugin-d97757" alt="Claude Code plugin">
+  <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="0 dependencies">
+  <img src="https://img.shields.io/badge/per%20check-~50%20ms-blue" alt="About 50 ms per check">
+</p>
+
+<p align="center">
+  <a href="README.md">Español</a> · <b>English</b>
+</p>
+
+---
+
+## The team
+
+Each fruit does one job. The expensive model is used only where it is needed.
+
+| Agent | Model | What it does | When it is used |
+|---|---|---|---|
+| 🍋 `lemon` | The session's model | Organizes and delegates | Always: it is the main session |
+| 🥝 `kiwi` | Haiku (cheap) | Searches the code, never edits | Before touching unfamiliar code |
+| 🫐 `fig` | Haiku (cheap) | Reads long test and build output | When something fails |
+| 🥭 `mango` | Sonnet (mid) | Implements a well-defined task | When what to build is already clear |
+| 🍒 `cherry` | Sonnet (Opus when risky) | Checks that the change works, with evidence | After an important change |
+
+## Nothing rotten reaches `main`
 
 | Without the plugin | With `dev-factory` |
 |---|---|
@@ -17,15 +45,24 @@ It has no dependencies (Node only) and each check takes about 50 ms: you do not 
 
 ## Install
 
-Inside the project, one command:
+One command, inside your project:
 
 ```bash
 npx github:enderdev01/la-fruteria
 ```
 
-It installs or updates the marketplace and the plugin, turns on its auto-update in `~/.claude/settings.json` (new versions install on their own when Claude Code starts; an explicit `false` is kept), installs the git hooks (if you edited one, it keeps a `.local-<date>` copy before replacing it), asks whether to trust the project, and relaunches Claude Code with a welcome.
+That is all. The command:
 
-Manual (if you prefer):
+- installs or updates the marketplace and the plugin;
+- turns on auto-update: new versions install on their own when Claude Code starts (an explicit `false` is kept);
+- installs the git hooks (if you edited one, it keeps a `.local-<date>` copy before replacing it);
+- marks the project as trusted and sets `lemon` as the default agent (without overwriting your settings);
+- relaunches Claude Code with a welcome.
+
+To update, run the same command again.
+
+<details>
+<summary>Manual install</summary>
 
 ```bash
 claude plugin marketplace add enderdev01/la-fruteria
@@ -40,7 +77,40 @@ Then, in each project under `~/DEV`:
 | 2 | Type `/dev-factory:trust` in the session | It lets the plugin run that project's tests |
 | 3 | Open a new session and work as usual | The protections act on their own |
 
-## How it works
+</details>
+
+## Try it
+
+With the plugin installed, ask Claude:
+
+> Run the `create-verification-skill` skill.
+
+It is the only step left after installing: it creates the project's verification script and feature map. From then on, the agent cannot finish while the tests are red.
+
+> Make a quick commit of this on `main`.
+
+It is blocked, gets the reason and creates a `feat/` branch on its own.
+
+> Add this change and verify that it works.
+
+🍋 `lemon` delegates: 🥝 `kiwi` searches, 🥭 `mango` implements and 🍒 `cherry` checks with evidence.
+
+## The five protections
+
+| Protection | What it checks | Example of what it stops |
+|---|---|---|
+| `branch-guard` | Which branch a commit or push goes to | `git commit` while on `main` |
+| `path-guard` | Which files are changed | Deleting the `.githooks` folder |
+| `attribution-guard` | The commit message and author | A `Co-Authored-By` line from an AI |
+| `check-file` | The file just edited, with ESLint | A lint error the agent left behind |
+| `verify-gate` | The project's tests, on finish | Calling a task done with broken tests |
+
+Full detail on rules, scope and the trust model: [plugins/dev-factory/README.md](plugins/dev-factory/README.md).
+
+## More detail
+
+<details>
+<summary><b>How it works</b></summary>
 
 Every time the agent wants to do something, the plugin checks it **before** it happens.
 
@@ -75,31 +145,10 @@ There are two barriers, one behind the other:
 
 The first one is fast, but a clever agent can get around it (with a script, for example). The second one has the final word: whatever slips past the first, git stops.
 
-### The five protections
+</details>
 
-| Protection | What it checks | Example of what it stops |
-|---|---|---|
-| `branch-guard` | Which branch a commit or push goes to | `git commit` while on `main` |
-| `path-guard` | Which files are changed | Deleting the `.githooks` folder |
-| `attribution-guard` | The commit message and author | A `Co-Authored-By` line from an AI |
-| `check-file` | The file just edited, with ESLint | A lint error the agent left behind |
-| `verify-gate` | The project's tests, on finish | Calling a task done with broken tests |
-
-### The agent team
-
-The plugin also splits the work, so the expensive model is used only where it is needed.
-
-| Agent | Model | What it does | When it is used |
-|---|---|---|---|
-| 🍋 `lemon` | The session's model | Organizes and delegates | Always: it is the main session |
-| 🥝 `kiwi` | Haiku (cheap) | Searches the code, never edits | Before touching unfamiliar code |
-| 🫐 `fig` | Haiku (cheap) | Reads long test and build output | When something fails |
-| 🥭 `mango` | Sonnet (mid) | Implements a well-defined task | When what to build is already clear |
-| 🍒 `cherry` | Sonnet (Opus when risky) | Checks that the change works, with evidence | After an important change |
-
-Full detail on rules, scope and the trust model: [plugins/dev-factory/README.md](plugins/dev-factory/README.md).
-
-## Demo
+<details>
+<summary><b>Demo</b>: what it blocks and what it lets through</summary>
 
 These results are real. You get them with:
 
@@ -126,11 +175,14 @@ The command creates a temporary repository on the `main` branch and runs each pr
 
 When it gets the reason, the agent corrects itself: it creates a `feat/` branch instead of trying again.
 
-The full raw output of the command is in the [Spanish README](README.md#demostración). The command exits with an error if any protection gives the wrong verdict.
+The full raw output of the command is in the [Spanish README](README.md), under "Demostración". The command exits with an error if any protection gives the wrong verdict.
 
-## Performance
+</details>
 
-**How much does it slow the agent down?** About 50 thousandths of a second per action. A blink takes twice as long.
+<details>
+<summary><b>Performance</b>: how much it slows the agent down</summary>
+
+About 50 thousandths of a second per action. A blink takes twice as long.
 
 Each `█` block is 5 ms:
 
@@ -158,6 +210,8 @@ Other numbers:
 Measured on an Apple M1 Pro with Node 26.13.0, median of 20 runs. To repeat it: `node scripts/control.mjs bench` (add `--json` for the raw data).
 
 > **What is not measured:** whether the agents write better code, or how many tokens delegating to Haiku and Sonnet saves. That depends on the model and the task, and this repository has no way to measure it yet.
+
+</details>
 
 ## Contributing
 
