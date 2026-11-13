@@ -23,7 +23,7 @@ Dentro del proyecto, un solo comando:
 npx github:enderdev01/la-fruteria
 ```
 
-Instala o actualiza el marketplace y el plugin, instala los hooks de git (si editaste alguno, guarda una copia `.local-<fecha>` antes de reemplazarlo), te pregunta si confías en el proyecto y reabre Claude Code con un saludo.
+Instala o actualiza el marketplace y el plugin, activa su auto-update en `~/.claude/settings.json` (las versiones nuevas se instalan solas al abrir Claude Code; si lo tienes en `false`, lo respeta), instala los hooks de git (si editaste alguno, guarda una copia `.local-<fecha>` antes de reemplazarlo), te pregunta si confías en el proyecto y reabre Claude Code con un saludo.
 
 Manual (si prefieres):
 

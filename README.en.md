@@ -23,7 +23,7 @@ Inside the project, one command:
 npx github:enderdev01/la-fruteria
 ```
 
-It installs or updates the marketplace and the plugin, installs the git hooks (if you edited one, it keeps a `.local-<date>` copy before replacing it), asks whether to trust the project, and relaunches Claude Code with a welcome.
+It installs or updates the marketplace and the plugin, turns on its auto-update in `~/.claude/settings.json` (new versions install on their own when Claude Code starts; an explicit `false` is kept), installs the git hooks (if you edited one, it keeps a `.local-<date>` copy before replacing it), asks whether to trust the project, and relaunches Claude Code with a welcome.
 
 Manual (if you prefer):
 

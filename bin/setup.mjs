@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // One-command setup for a human: npx github:enderdev01/la-fruteria
-// Installs or updates the marketplace and plugin, the git hooks and the trust entry, then relaunches Claude Code.
+// Installs or updates the marketplace and plugin, turns on its auto-update, sets the git hooks and the trust entry, then relaunches Claude Code.
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -42,6 +42,36 @@ export function setLemonAgent(root) {
   mkdirSync(join(root, ".claude"), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ ...settings, agent: LEMON }, null, 2)}\n`);
   return { status: "ok", message: "set" };
+}
+
+// Turns on Claude Code's auto-update for this marketplace in the user's settings (what /plugin > Marketplaces
+// toggles), so new versions reach every session without re-running the setup. Never overrides an explicit false.
+export function setAutoUpdate(home) {
+  const file = join(home, ".claude", "settings.json");
+  const json = (path) => JSON.parse(readFileSync(path, "utf8"));
+  let settings = {};
+  if (existsSync(file)) {
+    try {
+      settings = json(file);
+    } catch {
+      settings = null;
+    }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) return { status: "fail", message: "fix ~/.claude/settings.json (invalid JSON) and re-run" };
+  }
+  const entry = settings.extraKnownMarketplaces?.[MARKETPLACE];
+  if (entry?.autoUpdate === true) return { status: "skip", message: "already on" };
+  if (entry?.autoUpdate === false) return { status: "skip", message: "kept your setting (off)" };
+  let source = entry?.source;
+  try {
+    source ??= json(join(home, ".claude", "plugins", "known_marketplaces.json"))[MARKETPLACE].source;
+  } catch {}
+  if (!source) return { status: "skip", message: "marketplace source unknown, turn it on in /plugin > Marketplaces" };
+  const next = { ...settings, extraKnownMarketplaces: { ...settings.extraKnownMarketplaces, [MARKETPLACE]: { ...entry, source, autoUpdate: true } } };
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  // Write then rename: a crash mid-write must not truncate the user's settings.
+  writeFileSync(`${file}.dev-factory-tmp`, `${JSON.stringify(next, null, 2)}\n`);
+  renameSync(`${file}.dev-factory-tmp`, file);
+  return { status: "ok", message: "on" };
 }
 
 const readPackage = (root) => {
@@ -160,6 +190,13 @@ async function main() {
     if (!env.oldVersion) return { status: "ok", text: `installed v${env.newVersion}` };
     if (env.oldVersion !== env.newVersion) return { status: "ok", text: `v${env.oldVersion} → v${env.newVersion}` };
     return { status: "skip", text: `already up to date (v${env.newVersion})` };
+  }));
+
+  track(await step("Auto-update", async () => {
+    const r = setAutoUpdate(homedir());
+    if (r.status === "fail") throw new Error(r.message);
+    if (r.status === "ok") env.configured.push("turned on auto-update for the dev-factory marketplace, so new versions install on their own");
+    return { status: r.status, text: r.message };
   }));
 
   const root = await gitRoot(cwd);

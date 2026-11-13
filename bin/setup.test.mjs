@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeProjectDir, firstErrorLine, hasPlaywright, hasSession, hasWebUi, pickMarketplaceAction, pickPluginAction, playwrightInstallCommand, setLemonAgent, welcomePrompt } from "./setup.mjs";
+import { encodeProjectDir, firstErrorLine, hasPlaywright, hasSession, hasWebUi, pickMarketplaceAction, pickPluginAction, playwrightInstallCommand, setAutoUpdate, setLemonAgent, welcomePrompt } from "./setup.mjs";
 
 describe("encodeProjectDir", () => {
   it("replaces every non-alphanumeric character with a dash", () => {
@@ -52,6 +52,56 @@ describe("hasSession", () => {
     assert.equal(hasSession(project, home), false);
     writeFileSync(join(dir, "abc.jsonl"), "{}");
     assert.equal(hasSession(project, home), true);
+  });
+});
+
+describe("setAutoUpdate", () => {
+  const source = { source: "github", repo: "enderdev01/la-fruteria" };
+  // A fake home: `settings` is the text of settings.json (null: no file), `known` registers the marketplace.
+  const home = (settings, known = true) => {
+    const dir = mkdtempSync(join(tmpdir(), "setup-auto-"));
+    mkdirSync(join(dir, ".claude", "plugins"), { recursive: true });
+    if (settings !== null) writeFileSync(join(dir, ".claude", "settings.json"), settings);
+    if (known) writeFileSync(join(dir, ".claude", "plugins", "known_marketplaces.json"), JSON.stringify({ "factory-marketplace": { source } }));
+    return dir;
+  };
+  const file = (dir) => join(dir, ".claude", "settings.json");
+  const read = (dir) => JSON.parse(readFileSync(file(dir), "utf8"));
+
+  it("turns it on with the registered source and keeps every other setting", () => {
+    const dir = home(JSON.stringify({ outputStyle: "x", extraKnownMarketplaces: { other: { autoUpdate: false } } }));
+    assert.deepEqual(setAutoUpdate(dir), { status: "ok", message: "on" });
+    assert.deepEqual(read(dir), { outputStyle: "x", extraKnownMarketplaces: { other: { autoUpdate: false }, "factory-marketplace": { source, autoUpdate: true } } });
+    assert.deepEqual(readdirSync(join(dir, ".claude")).sort(), ["plugins", "settings.json"]);
+  });
+  it("creates the settings file when missing", () => {
+    const dir = home(null);
+    assert.equal(setAutoUpdate(dir).status, "ok");
+    assert.equal(read(dir).extraKnownMarketplaces["factory-marketplace"].autoUpdate, true);
+  });
+  it("keeps the entry's own source", () => {
+    const own = { source: "directory", path: "/x" };
+    const dir = home(JSON.stringify({ extraKnownMarketplaces: { "factory-marketplace": { source: own } } }));
+    setAutoUpdate(dir);
+    assert.deepEqual(read(dir).extraKnownMarketplaces["factory-marketplace"], { source: own, autoUpdate: true });
+  });
+  for (const [value, message] of [[true, "already on"], [false, "kept your setting (off)"]]) {
+    it(`leaves the file untouched when autoUpdate is ${value}`, () => {
+      const text = JSON.stringify({ extraKnownMarketplaces: { "factory-marketplace": { source, autoUpdate: value } } });
+      const dir = home(text);
+      assert.deepEqual(setAutoUpdate(dir), { status: "skip", message });
+      assert.equal(readFileSync(file(dir), "utf8"), text);
+    });
+  }
+  it("fails on invalid JSON without touching the file", () => {
+    const dir = home("{ nope");
+    assert.equal(setAutoUpdate(dir).status, "fail");
+    assert.equal(readFileSync(file(dir), "utf8"), "{ nope");
+  });
+  it("writes nothing when the marketplace is not registered", () => {
+    const dir = home(null, false);
+    assert.equal(setAutoUpdate(dir).status, "skip");
+    assert.equal(existsSync(file(dir)), false);
   });
 });
 
