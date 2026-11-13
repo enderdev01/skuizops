@@ -8,6 +8,7 @@
 //   node branch-guard.mjs pre-push     git pre-push hook, reads "<local ref> <sha> <remote ref> <sha>" lines
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, normalize } from "node:path";
 import { inScope, isMain, projectDir } from "./scope.mjs";
 
@@ -58,29 +59,35 @@ export function isPlainGhCall(command) {
   return !/[;&|<>(){}$`\\#"'\n]/.test(rest);
 }
 
-// Directory the command's git runs in, or null (= the session branch). Only two strict shapes are trusted:
-// `cd <path> && git ...` and a single `git -C <path> ...`; everything else could hide a second cd.
-const PATH_RE = /^(\/|\.\/|\.\.\/|\.\.$|\.$)[\w./@+-]*$/;
+// Directory the command's git runs in, or null (= the session branch). Only strict shapes are trusted:
+// `cd <path> && git ...` or `&&`-chained `git -C <same path> ...`; everything else could hide a second cd.
+// Inert quoted data / safe heredocs (as in isPlainGhCall) and a trailing `2>&1`, `>/dev/null`, `| tail|head|cat`
+// are ignored. Quoted text becomes \u0001 so a quoted `"-C"` before the subcommand is still rejected.
+const PATH_RE = /^(\/|\.\/|\.\.\/|~\/|\.\.$|\.$)[\w./@+-]*$/;
 const DIR_OPTION = /^(-C|-c|--git-dir|--work-tree)/;
+const SAFE_TAIL = /(?:\s+(?:2>&1|[12]?>\/dev\/null))*(?:\s*\|\s*(?:tail|head|cat)(?:\s+(?!git\b)-?\w+)*)?$/;
 export function targetDir(command) {
-  if (/[$`\\\n]/.test(command)) return null;
-  const bare = command.replace(/"[^"]*"|'[^']*'/g, "");
-  if (/[;|<>(){}#!"']/.test(bare) || /&/.test(bare.replace(/&&/g, ""))) return null;
-  const parts = command.split("&&").map((p) => p.trim());
-  const words = (p) => p.replace(/["']/g, "").split(/\s+/);
-  if (parts.length === 1) {
-    const m = /^git\s+-C\s+(\S+)(\s.*)?$/.exec(parts[0]);
-    if (!m || !PATH_RE.test(m[1])) return null;
-    const rest = words(m[2] ?? "").filter(Boolean);
-    for (let i = 0; i < rest.length && rest[i].startsWith("-"); i += GIT_OPTIONS_WITH_VALUE.includes(rest[i]) ? 2 : 1) {
-      if (DIR_OPTION.test(rest[i])) return null;
+  const stripped = command.replace(GH_DATA, (m, tag, body) => (tag && body.split("\n").includes(tag) ? m : "\u0001"));
+  const bare = stripped.replace(SAFE_TAIL, "");
+  if (/[$`\\\n;|<>(){}#!"']/.test(bare) || /&/.test(bare.replace(/&&/g, ""))) return null;
+  const parts = bare.split("&&").map((p) => p.trim());
+  const words = (p) => p.split(/\s+/);
+  // true when a dir/config option (or quoted text) sits among the leading git options
+  const badOptions = (ws) => {
+    for (let i = 0; i < ws.length && ws[i].startsWith("-"); i += GIT_OPTIONS_WITH_VALUE.includes(ws[i]) ? 2 : 1) {
+      if (DIR_OPTION.test(ws[i]) || ws[i].includes("\u0001")) return true;
     }
-    return m[1]; // raw: `git -C` follows symlinks physically, so `..` must not be folded here
+    return ws[0]?.includes("\u0001") ?? false;
+  };
+  const home = (d) => (d.startsWith("~/") ? homedir() + d.slice(1) : d);
+  const gitC = parts.map((p) => /^git\s+-C\s+(\S+)(\s.*)?$/.exec(p));
+  if (gitC.every((m) => m && PATH_RE.test(m[1]) && m[1] === gitC[0][1] && !badOptions(words(m[2] ?? "").filter(Boolean)))) {
+    return home(gitC[0][1]); // raw: `git -C` follows symlinks physically, so `..` must not be folded here
   }
   const cd = /^cd\s+(\S+)$/.exec(parts[0]);
   if (!cd || !PATH_RE.test(cd[1])) return null;
-  const ok = parts.slice(1).every((p) => /^git(\s|$)/.test(p) && !words(p).some((w) => DIR_OPTION.test(w)));
-  return ok ? normalize(cd[1]) : null;
+  const ok = parts.slice(1).every((p) => /^git(\s|$)/.test(p) && !words(p).some((w) => DIR_OPTION.test(w)) && !badOptions(words(p).slice(1)));
+  return ok ? normalize(home(cd[1])) : null;
 }
 
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.

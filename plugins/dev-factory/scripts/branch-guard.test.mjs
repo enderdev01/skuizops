@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
 import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation, targetDir } from "./branch-guard.mjs";
 
 describe("isProtected", () => {
@@ -137,7 +138,7 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
   });
 
   describe("target dir and quoted text", () => {
-    const at = (d) => ({ "../wt": "fix/x", "../repo": "develop" })[d] ?? null;
+    const at = (d) => ({ "../wt": "fix/x", "../repo": "develop", [`${homedir()}/DEV/r-worktrees/x`]: "fix/x", [`${homedir()}/repo`]: "develop" })[d] ?? null;
     const run = (cmd, branch) => checkCommand(cmd, branch, at);
     const S = "develop";
     const onFeat = "feat/login";
@@ -146,10 +147,19 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
       `cd ../wt && git add . && git commit -m "fix: it's done"`,
       "git -C ../wt push -u origin fix/x",
       "cd ../wt && git push -u origin fix/x",
+      "git -C ../wt commit -m \"$(cat <<'EOF'\nfix: a\nEOF\n)\"",
+      "cd ../wt && git add -A && git commit -m \"$(cat <<'EOF'\nfix: a\nEOF\n)\"",
+      "cd ../wt && git push -u origin HEAD 2>&1",
+      "git -C ../wt push -u origin HEAD 2>&1 | tail -5",
+      "git -C ../wt push -u origin HEAD >/dev/null 2>&1 | head -n 5",
+      "git -C ../wt add -A && git -C ../wt commit -m 'fix: a'",
+      "git -C ../wt add -A && git -C ../wt push -u origin HEAD",
+      "git -C ~/DEV/r-worktrees/x commit -m x",
+      "cd ~/DEV/r-worktrees/x && git commit -m x",
     ]) {
       it(`trusts the target dir: ${JSON.stringify(cmd)}`, () => assert.equal(run(cmd, S), null));
     }
-    for (const cmd of ["git -C ../repo commit -m x", "cd ../repo && git commit -m x"]) {
+    for (const cmd of ["git -C ../repo commit -m x", "cd ../repo && git commit -m x", "git -C ~/repo commit -m x"]) {
       it(`blocks a protected target dir: ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, onFeat), /blocked/));
     }
     it("ignores git inside a plain gh call", () => {
@@ -185,6 +195,14 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
       `gh alias set --shell ci 'git commit ${m}'`,
       `cd wt && git commit ${m}`,
       `git -C ../wt -C ../repo commit ${m}`,
+      `git -C ../wt add -A && git -C ../repo commit ${m}`,
+      `git -C ../wt push 2>&1 | bash`,
+      `git -C ../wt push | tail -1; git commit ${m}`,
+      `git -C ../wt commit -m "$(cd ../repo)"`,
+      `git -C ../wt "-C" ../repo commit ${m}`,
+      `git -C ../wt commit -m "$(cat <<'EOF'\nx\nEOF\ngit -C ../repo commit ${m}\nEOF\n)"`,
+      `git -C ~ commit ${m}`,
+      `git -C ~root commit ${m}`,
     ]) {
       it(`blocks bypass: ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, S), /blocked/));
     }
