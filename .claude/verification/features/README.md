@@ -13,5 +13,6 @@ The user-facing features of the `dev-factory` plugin and how to exercise each on
 | Subagent status row | Status line: one row per subagent with fruit emoji, task, model and tokens | `node scripts/control.mjs verify` | [subagent-row.md](subagent-row.md) |
 | Trust command | `/dev-factory:trust [dir]`: the human adds a project to the trust list | `node scripts/control.mjs verify` | [trust.md](trust.md) |
 | Install-hooks command | `/dev-factory:install-hooks [dir]`: the human installs the git hooks and guard scripts in a project | `node scripts/control.mjs verify` | [install-hooks.md](install-hooks.md) |
+| Setup command | `npx github:enderdev01/la-fruteria`: the human installs or updates marketplace, plugin, git hooks (keeping backups of edits) and trust, then relaunches Claude | `node --test bin/setup.test.mjs` | [install-hooks.md](install-hooks.md) |
 
 `node scripts/control.mjs doctor` checks the environment (Node 22.18+, git hooks, work branch) and runs before everything else.

@@ -145,6 +145,15 @@ describe("commandViolation", () => {
   });
   it("allows reading install-hooks.mjs", () => assert.equal(check("cat /p/scripts/install-hooks.mjs"), null));
 
+  it("blocks agents from running the one-command setup", () => {
+    for (const c of ["node bin/setup.mjs", "npx github:enderdev01/la-fruteria", "npx dev-factory-setup", 'node "./bin/set"up.mjs']) {
+      assert.match(check(c), /npx github:enderdev01\/la-fruteria/, c);
+    }
+  });
+  it("allows reading the setup", () => {
+    for (const c of ["cat bin/setup.mjs", "grep npx README.md enderdev01/la-fruteria"]) assert.equal(check(c), null, c);
+  });
+
   describe("entry point `bash`", () => {
     const script = fileURLToPath(new URL("./path-guard.mjs", import.meta.url));
     const outside = mkdtempSync(join(tmpdir(), "pg-out-"));

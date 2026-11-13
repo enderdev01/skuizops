@@ -1,6 +1,7 @@
 // `install-hooks.mjs` is what the human-only /dev-factory:install-hooks command runs.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { accessSync, constants, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,14 +35,53 @@ describe("installHooks", () => {
     assert.equal(hooksPath(dir), ".githooks");
   });
 
-  it("is idempotent, overwrites stale copies and keeps other files", () => {
+  const manifest = (dir) => JSON.parse(readFileSync(join(dir, ".githooks", ".dev-factory.json"), "utf8"));
+  const backupsOf = (dir) => readdirSync(join(dir, ".githooks")).filter((f) => f.includes(".local-"));
+
+  it("writes a manifest on a fresh install", () => {
     const dir = repo();
     installHooks(dir);
-    writeFileSync(join(dir, ".githooks", "pre-commit"), "stale");
-    writeFileSync(join(dir, ".githooks", "mine"), "keep");
+    const m = manifest(dir);
+    assert.equal(m.version, JSON.parse(readFileSync(join(scripts, "..", ".claude-plugin", "plugin.json"), "utf8")).version);
+    assert.equal(m.files[".githooks/pre-commit"], createHash("sha256").update(readFileSync(join(templates, "pre-commit"))).digest("hex"));
+    assert.ok(m.files["scripts/guard/scope.mjs"]);
+  });
+
+  it("re-running reports up to date and makes no backup", () => {
+    const dir = repo();
     installHooks(dir);
+    const { actions, backups } = installHooks(dir);
+    assert.deepEqual(backups, []);
+    assert.ok(actions.includes(".githooks/pre-commit is up to date"));
+    assert.deepEqual(backupsOf(dir), []);
+  });
+
+  it("backs up an edited file, then replaces it, and keeps other files", () => {
+    const dir = repo();
+    installHooks(dir);
+    writeFileSync(join(dir, ".githooks", "pre-commit"), "my edit");
+    writeFileSync(join(dir, ".githooks", "mine"), "keep");
+    const { backups, actions } = installHooks(dir);
+    assert.equal(backups.length, 1);
+    assert.match(backups[0], /pre-commit\.local-\d{8}-\d{6}$/);
+    assert.equal(readFileSync(backups[0], "utf8"), "my edit");
+    assert.ok(actions.some((a) => a.startsWith("Backed up your edits of .githooks/pre-commit")));
     assert.equal(readFileSync(join(dir, ".githooks", "pre-commit"), "utf8"), readFileSync(join(templates, "pre-commit"), "utf8"));
     assert.equal(readFileSync(join(dir, ".githooks", "mine"), "utf8"), "keep");
+  });
+
+  it("overwrites without a backup a file still matching the manifest", () => {
+    const dir = repo();
+    installHooks(dir);
+    // Pretend an older plugin wrote "stale" and recorded it.
+    writeFileSync(join(dir, ".githooks", "pre-commit"), "stale");
+    const m = manifest(dir);
+    m.files[".githooks/pre-commit"] = createHash("sha256").update("stale").digest("hex");
+    writeFileSync(join(dir, ".githooks", ".dev-factory.json"), JSON.stringify(m));
+    const { backups, actions } = installHooks(dir);
+    assert.deepEqual(backups, []);
+    assert.ok(actions.includes("Updated .githooks/pre-commit"));
+    assert.equal(readFileSync(join(dir, ".githooks", "pre-commit"), "utf8"), readFileSync(join(templates, "pre-commit"), "utf8"));
   });
 
   it("reports a previous, different hooks path", () => {

@@ -79,6 +79,16 @@ On a protected branch, `rebase`, `am` and `reset` are blocked like `commit` and 
 
 ## Install
 
+Inside your project, run one command:
+
+```bash
+npx github:enderdev01/la-fruteria
+```
+
+It installs or updates the marketplace and the plugin, installs the git hooks (an edited hook is saved as `<file>.local-<date>` before it is replaced), asks whether to trust the project, and relaunches Claude Code with a welcome. Only the human runs it; the path guard blocks agents.
+
+Manual:
+
 ```bash
 claude plugin marketplace add <path-to-this-repo>
 claude plugin install dev-factory@factory-marketplace
