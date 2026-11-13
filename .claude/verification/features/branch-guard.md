@@ -19,3 +19,6 @@ Exercise: `node scripts/control.mjs bench`, which runs it in a throwaway repo on
 - Project outside the scope roots (`~/DEV` plus `DEV_FACTORY_ROOTS`): allowed, the guard does not act.
 - Reading the setting is caught too: `git config core.hooksPath` with no value was blocked in this session, so use `grep hooksPath .git/config` to read it.
 - Matches command text: interpreters and variables can bypass it (best effort, documented in the code).
+- Target dir (session on `develop`, worktree `../wt` on `fix/x`): `git -C ../wt commit -m x` and `cd ../wt && git commit -m x` are judged by `fix/x` and allowed. Any other shape (`pushd`, subshells, `$VAR`, `cd wt` without `./`) is judged by the session branch.
+- A single plain `gh` call (not `alias`/`extension`) is not parsed for git: `gh issue create --body "... git commit ..."` and `gh pr create --body "$(cat <<'EOF' ... EOF)"` are allowed.
+- Known gaps (verified, left as is): extra `git switch`/`git fetch . x:develop` chained after the `cd`, user gh aliases (`gh r "..."`), and a session cwd under a symlink.
