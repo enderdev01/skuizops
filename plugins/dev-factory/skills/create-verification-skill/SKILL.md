@@ -10,7 +10,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 ## Steps
 
-1. **Explore the app with kiwi.** Ask kiwi to list every user-facing feature (commands, endpoints, screens, exported APIs), the entry point of each, and an example input. Do not guess: read the code.
+1. **Explore the app with kiwi.** Ask kiwi to list every user-facing feature (commands, endpoints, screens, exported APIs), the entry point of each, and an example input. Also ask whether the app renders a canvas/WebGL scene (imports of `three`, `@react-three/fiber`, `@babylonjs/core`, `pixi.js`, `phaser`, or a `<canvas>` with `getContext`), how a user reaches it (route, room, login) and moves the camera, and whether a route or debug query param loads it with no interaction. Do not guess: read the code.
 
 2. **Create the control CLI.**
    - Copy the template, quoting the path because it may contain spaces: `cp "${CLAUDE_PLUGIN_ROOT}/templates/control.mjs" scripts/control.mjs`.
@@ -24,8 +24,10 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
      - exit 0 on success, 1 on failure.
 
 3. **Write the feature map** in `.claude/verification/features/`.
-   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command. Screens get rows whose cell is `node scripts/control.mjs screenshot <route>`.
+   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command. Screens get rows whose cell is `node scripts/control.mjs screenshot [route]` (the route defaults to `/`).
    - One file per feature (linked from the Details column) with a table of expected input and output, plus the edge cases (empty, very large, invalid input).
+   - The screens file includes a row for `screenshot` with no arguments, with its observed output and exit code.
+   - **Canvas/3D scenes** (found in step 1): one row per main scene, with its own details file (for example `world.md`). If a route or debug query param reaches the scene with no interaction, the cell is `node scripts/control.mjs screenshot <route> --wait <ms>` (the wait lets the first frames render), and the details file lists any camera presets that param supports. Otherwise, or if the headless capture comes out blank (no WebGL), the cell is `manual verification` and the details file gives the exact steps: how to reach the scene, the controls that move the camera, and which parts of the scene to look at. Do not add a debug route to the app unasked: propose it in the report.
    - Fill the tables by running each command and recording what you observe. Never invent expected output.
 
 4. **Have the human install the git hooks and the branch guard.** You cannot do it: `.githooks/` and `scripts/guard/` are protected from agents. Give the human these commands to run from the project root, with `${CLAUDE_PLUGIN_ROOT}` replaced by its real path, and wait until they say it is done:
@@ -53,4 +55,4 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 7. **Document it.** Add the `doctor` and `verify` commands and the branch policy to the project's AGENTS.md, and point to the feature map.
 
-Report: files created or changed (including `.gitignore`), the observed output of `doctor` and `verify`, the number of features catalogued, whether the `screenshot` command works, and the pre-existing failures you left untouched.
+Report: files created or changed (including `.gitignore`), the observed output of `doctor` and `verify`, the number of features catalogued, whether the `screenshot` command works, each canvas/3D scene and how it is covered (command or manual steps), and the pre-existing failures you left untouched.

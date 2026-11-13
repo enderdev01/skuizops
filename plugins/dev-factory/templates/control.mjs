@@ -2,9 +2,9 @@
 // Verification CLI: the lever agents use to check their own work.
 // Every command supports --json. Exit 0 on success, 1 on failure.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,8 +23,9 @@ Commands:
   doctor    Check the environment is ready (node, deps, git hooks, branch)
   verify    Run the project's typecheck, lint and test npm scripts that exist; report each step
 
-  screenshot <route> [--out <file.png>] [--wait <ms>] [--full-page]
-            Headless screenshot of a route of the app (needs APP set and Playwright installed in the project)
+  screenshot [route] [--out <file.png>] [--wait <ms>] [--full-page]
+            Headless screenshot of a route of the app, "/" by default (needs APP set and Playwright installed in the project)
+            Without --out it writes $TMPDIR/<project>-screenshot.png, overwritten on every run
             Example: node scripts/control.mjs screenshot /settings --full-page
 
 Every command exits 0 on success and 1 on failure. Add --json for machine-readable output.`;
@@ -161,7 +162,8 @@ async function screenshot(lineArgs) {
   }
   const target = new URL(route, APP.url).href;
   // Resolved from the caller's cwd (Playwright runs from the project root); absolute, so "-x.png" is never read as a flag.
-  const out = outArg ? resolve(outArg) : join(mkdtempSync(join(tmpdir(), "screenshot-")), "screenshot.png");
+  // One fixed file per project, so repeated runs never pile up temp directories.
+  const out = outArg ? resolve(outArg) : join(tmpdir(), `${basename(root)}-screenshot.png`);
   let server = null;
   let pwChild = null;
   let exited = false;

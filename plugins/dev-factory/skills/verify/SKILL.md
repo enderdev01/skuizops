@@ -40,7 +40,7 @@ If the feature is not in the map, add it (see "Keeping this skill current"). A r
 
 For a visual change (UI, layout, canvas/3D, styles), numbers are not enough: look at it.
 
-1. Screenshot: `node scripts/control.mjs screenshot <route>` (add `--full-page` or `--wait <ms>` as needed), then Read the PNG.
+1. Screenshot: `node scripts/control.mjs screenshot [route]` (route defaults to `/`; add `--full-page` or `--wait <ms>` as needed), then Read the PNG.
 2. Interaction: use the Chrome tools (`mcp__claude-in-chrome__*`, load them with ToolSearch if deferred) on the URL the orchestrator gave. Open a new tab and never trigger alert or confirm dialogs.
 3. If neither works (no screenshot command, Playwright missing, extension not connected, no URL), mark the requirement BLOCKED with the reason. "Not looked at in the browser" is never PASS.
 
