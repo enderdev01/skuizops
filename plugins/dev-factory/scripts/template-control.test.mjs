@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const template = fileURLToPath(new URL("../templates/control.mjs", import.meta.url));
@@ -100,13 +100,14 @@ function screenshot(app, { env = {}, pw = true, route = "/", extra = [] } = {}) 
 }
 
 // Runs `screenshot` without blocking the event loop, so an in-process server can answer.
-async function runShot(app, { extra = [], cwd } = {}) {
+// `route: null` omits the route argument.
+async function runShot(app, { extra = [], cwd, route = "/" } = {}) {
   const dir = shotProject(app, { pw: true });
-  const child = spawn("node", [join(dir, "scripts", "control.mjs"), "screenshot", "/", ...extra, "--json"], { cwd: cwd ?? dir });
+  const child = spawn("node", [join(dir, "scripts", "control.mjs"), "screenshot", ...(route === null ? [] : [route]), ...extra, "--json"], { cwd: cwd ?? dir });
   let stdout = "";
   child.stdout.on("data", (d) => (stdout += d));
   const status = await new Promise((r) => child.on("close", r));
-  return { status, out: JSON.parse(stdout) };
+  return { status, out: JSON.parse(stdout), dir };
 }
 
 // Serves `body` (a string, or a (req, res) handler) on a free port, then runs `screenshot` against it.
@@ -174,6 +175,13 @@ describe("screenshot", () => {
     for (let i = 0; i < 30 && !gone(pid); i++) await new Promise((res) => setTimeout(res, 100));
     if (!gone(pid)) process.kill(pid, "SIGKILL");
     assert.equal(gone(pid), true);
+  });
+  it("captures / when no route is given, into one fixed file per project", async () => {
+    let path;
+    const r = await shotAgainst((req, res) => { path = req.url; res.end("<title>MYAPP</title>"); }, {}, { route: null });
+    assert.equal(r.status, 0);
+    assert.equal(path, "/");
+    assert.equal(r.out.file, join(tmpdir(), `${basename(r.dir)}-screenshot.png`));
   });
   it("writes a relative --out into the caller's directory, as an absolute path", async () => {
     const caller = realpathSync(mkdtempSync(join(tmpdir(), "control-caller-")));
