@@ -46,7 +46,7 @@ Use one worktree per parallel change. Cover its whole life:
 1. Create it next to the repo, from the default branch: `git worktree add -b fix/<name> ../<repo>-worktrees/<name> origin/<default>` (run `git fetch` first).
 2. Install its dependencies with the project's install command (the one matching its lockfile): a worktree has no `node_modules`.
 3. Give it its own ports, one for every server the dev stack starts (app, API, worker), unused by the main checkout and other worktrees. Start them in the worktree (`npm run <script> -- --port <n>` or the project's flag), check their output for "port in use" errors, and pass the URL to cherry and `--port <n>` to `screenshot`.
-4. Commit and push from it with `git -C <worktree> commit` and `git -C <worktree> push -u origin fix/<name>`. While the session's checkout is on a protected branch, the branch guard still judges by that branch and blocks these: show the human the exact commands to run instead of looking for a way around the guard.
+4. Commit and push from it with `git -C <worktree> commit` and `git -C <worktree> push -u origin fix/<name>`. The branch guard judges these by the worktree's branch, even while the session's checkout is on a protected branch. Pass the worktree path as an absolute path, `~/...` or `../...`. If the guard still blocks one, show the human the exact commands to run instead of looking for a way around the guard.
 5. Stop its servers when cherry reports. After the PR merges, `git worktree remove <worktree>` and `git branch -d fix/<name>`.
 
 ## After a merge
