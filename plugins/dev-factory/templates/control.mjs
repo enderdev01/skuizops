@@ -2,9 +2,9 @@
 // Verification CLI: the lever agents use to check their own work.
 // Every command supports --json. Exit 0 on success, 1 on failure.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,9 +23,10 @@ Commands:
   doctor    Check the environment is ready (node, deps, git hooks, branch)
   verify    Run the project's typecheck, lint and test npm scripts that exist; report each step
 
-  screenshot [route] [--out <file.png>] [--wait <ms>] [--full-page]
+  screenshot [route] [--out <file.png>] [--wait <ms>] [--full-page] [--port <n>]
             Headless screenshot of a route of the app, "/" by default (needs APP set and Playwright installed in the project)
             Without --out it writes $TMPDIR/<project>-screenshot.png, overwritten on every run
+            --port replaces the port of APP.url (default is APP.url's); use it for a worktree's own dev server, which you start first
             Example: node scripts/control.mjs screenshot /settings --full-page
 
 Every command exits 0 on success and 1 on failure. Add --json for machine-readable output.`;
@@ -136,9 +137,17 @@ const got = (p) => (p ? `HTTP ${p.status}` : "no page within 15s");
 const PW_HINT = "npm i -D playwright && npx playwright install chromium";
 const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
 
+// Directories of the processes listening on `port` (via lsof), or null when it cannot tell.
+function servedFrom(port) {
+  const ls = (a) => spawnSync("lsof", a, { encoding: "utf8", timeout: 5000 });
+  const pids = (ls(["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]).stdout ?? "").split("\n").filter(Boolean);
+  const dirs = pids.flatMap((pid) => (ls(["-a", "-p", pid, "-d", "cwd", "-Fn"]).stdout ?? "").split("\n").filter((l) => l.startsWith("n")).map((l) => l.slice(1)));
+  return dirs.length ? dirs : null;
+}
+
 async function screenshot(lineArgs) {
   const flag = (name) => (lineArgs.includes(name) ? lineArgs[lineArgs.indexOf(name) + 1] : undefined);
-  const route = lineArgs.find((a, i) => !a.startsWith("--") && !["--out", "--wait"].includes(lineArgs[i - 1])) ?? "/";
+  const route = lineArgs.find((a, i) => !a.startsWith("--") && !["--out", "--wait", "--port"].includes(lineArgs[i - 1])) ?? "/";
   if (!APP.url) {
     report(false, { error: "APP not set" }, "FAIL APP is not set  ->  set APP = { start, url, expect } in scripts/control.mjs (see the create-verification-skill skill)");
   }
@@ -151,8 +160,11 @@ async function screenshot(lineArgs) {
   const outArg = flag("--out");
   if (lineArgs.includes("--out") && (!outArg || outArg.startsWith("--"))) invalid(`--out needs a file path, got "${outArg ?? ""}"`);
   if (lineArgs.includes("--wait") && !/^\d{1,5}$/.test(wait ?? "")) invalid(`--wait needs a number of milliseconds up to 99999, got "${wait ?? ""}"`);
+  const portArg = flag("--port");
+  if (lineArgs.includes("--port") && (!/^\d{1,5}$/.test(portArg ?? "") || Number(portArg) < 1 || Number(portArg) > 65535)) invalid(`--port needs a port number from 1 to 65535, got "${portArg ?? ""}"`);
+  const url = portArg ? Object.assign(new URL(APP.url), { port: portArg }).href : APP.url;
   // The origin check also catches "//host" and "/\host", which URL parsing sends to another host.
-  if (!route.startsWith("/") || new URL(route, APP.url).origin !== new URL(APP.url).origin) invalid(`route must be a path starting with a single "/", got "${route}"`);
+  if (!route.startsWith("/") || new URL(route, url).origin !== new URL(url).origin) invalid(`route must be a path starting with a single "/", got "${route}"`);
   const timeoutEnv = process.env.CONTROL_START_TIMEOUT_MS;
   if (timeoutEnv !== undefined && !/^[1-9]\d*$/.test(timeoutEnv)) invalid(`CONTROL_START_TIMEOUT_MS must be a positive number of milliseconds, got "${timeoutEnv}"`);
   // The project's own binary: npx would silently fall back to a global Playwright.
@@ -160,13 +172,14 @@ async function screenshot(lineArgs) {
   if (!existsSync(pwBin)) {
     report(false, { error: "Playwright is not installed in this project", fix: PW_HINT }, `FAIL Playwright is not installed in this project  ->  ${PW_HINT}`);
   }
-  const target = new URL(route, APP.url).href;
+  const target = new URL(route, url).href;
   // Resolved from the caller's cwd (Playwright runs from the project root); absolute, so "-x.png" is never read as a flag.
   // One fixed file per project, so repeated runs never pile up temp directories.
   const out = outArg ? resolve(outArg) : join(tmpdir(), `${basename(root)}-screenshot.png`);
   let server = null;
   let pwChild = null;
   let exited = false;
+  let warning = null;
   let log = "";
   const tail = () => log.trim().split("\n").slice(-10).join("\n");
   // Only ever kills a server this run started.
@@ -179,13 +192,22 @@ async function screenshot(lineArgs) {
     report(false, { error, detail: text }, `FAIL ${text}`);
   };
   for (const [sig, code] of Object.entries(SIGNALS)) process.on(sig, () => { stop(); process.exit(code); });
-  const { port, protocol } = new URL(APP.url);
-  const home = (await answers(APP.url)) ? await page(APP.url) : null;
+  const { port, protocol } = new URL(url);
+  const home = (await answers(url)) ? await page(url) : null;
   if (home && !isApp(home)) {
-    fail("port taken", `${APP.url} answers (${got(home)}) but its page does not contain APP.expect ("${APP.expect}"): another app holds the port, or the app is failing  ->  check what listens (lsof -nP -iTCP:${port || (protocol === "https:" ? 443 : 80)} -sTCP:LISTEN), stop it if it is not this app, then retry`);
+    fail("port taken", `${url} answers (${got(home)}) but its page does not contain APP.expect ("${APP.expect}"): another app holds the port, or the app is failing  ->  check what listens (lsof -nP -iTCP:${port || (protocol === "https:" ? 443 : 80)} -sTCP:LISTEN), stop it if it is not this app, then retry`);
   }
-  if (!(await answers(APP.url))) {
-    if (!APP.start) fail("app not running", `${APP.url} does not answer and APP.start is not set  ->  start the app or set APP.start in scripts/control.mjs`);
+  if (home) {
+    // A second checkout of the same app passes isApp, so check the server runs from this project.
+    const dirs = servedFrom(new URL(url).port || (protocol === "https:" ? 443 : 80));
+    const rootReal = realpathSync(root);
+    const inside = (d) => { const r = relative(rootReal, d); return !r.startsWith("..") && !isAbsolute(r); };
+    if (dirs && !dirs.some(inside)) fail("other checkout", `${url} is served from ${dirs.join(", ")}, not from this project (${rootReal}): another checkout holds the port  ->  stop it, or run this checkout's server on another port and pass --port <n>`);
+    if (!dirs) warning = `could not confirm that ${url} is served from this checkout (lsof missing or no listener found)`;
+  }
+  if (!home) {
+    if (portArg) fail("app not running", `${url} does not answer and --port was given  ->  start this checkout's dev server on port ${portArg} first, then retry`);
+    if (!APP.start) fail("app not running", `${url} does not answer and APP.start is not set  ->  start the app or set APP.start in scripts/control.mjs`);
     server = spawn(APP.start[0], APP.start.slice(1), { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     server.on("error", (e) => { log += `${e.message}\n`; exited = true; });
     server.on("exit", () => (exited = true));
@@ -194,12 +216,12 @@ async function screenshot(lineArgs) {
     let up = false;
     while (!up && !exited && Date.now() < deadline) {
       await sleep(500);
-      up = await answers(APP.url);
+      up = await answers(url);
     }
-    if (!up && exited) fail("app did not start", `"${APP.start.join(" ")}" exited before ${APP.url} answered  ->  last output:\n${tail()}`);
-    if (!up) fail("app did not start", `${APP.url} did not answer after starting "${APP.start.join(" ")}"  ->  last output:\n${tail()}`);
-    const started = await page(APP.url);
-    if (!isApp(started)) fail("not the app", `"${APP.start.join(" ")}" started but ${APP.url} (${got(started)}) does not contain APP.expect ("${APP.expect}")  ->  fix APP.expect or APP.url in scripts/control.mjs`);
+    if (!up && exited) fail("app did not start", `"${APP.start.join(" ")}" exited before ${url} answered  ->  last output:\n${tail()}`);
+    if (!up) fail("app did not start", `${url} did not answer after starting "${APP.start.join(" ")}"  ->  last output:\n${tail()}`);
+    const started = await page(url);
+    if (!isApp(started)) fail("not the app", `"${APP.start.join(" ")}" started but ${url} (${got(started)}) does not contain APP.expect ("${APP.expect}")  ->  fix APP.expect or url in scripts/control.mjs`);
   }
   const pw = await new Promise((resolve) => {
     // Own process group so an interrupt can kill Playwright and its browser together.
@@ -217,7 +239,7 @@ async function screenshot(lineArgs) {
     const missing = /Executable doesn't exist|playwright install/i.test(msg);
     report(false, { error: msg, ...(missing ? { fix: PW_HINT } : {}) }, `FAIL screenshot of ${target}  ->  ${missing ? `Playwright browser is missing: ${PW_HINT}` : msg.split("\n").slice(-10).join("\n")}`);
   }
-  report(true, { url: target, file: out }, `ok screenshot ${target} -> ${out}`);
+  report(true, { url: target, file: out, ...(warning ? { warning } : {}) }, `ok screenshot ${target} -> ${out}${warning ? `\nwarning: ${warning}` : ""}`);
 }
 
 // Add one function per user-facing feature, then register it below. Example:

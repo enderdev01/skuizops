@@ -79,8 +79,7 @@ describe("doctor: git hooks", () => {
 });
 
 // Copies the template into a temp project, optionally patching its APP line and stubbing the project's Playwright.
-function shotProject(app, { pw = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "control-shot-"));
+function shotProject(app, { pw = false, dir = mkdtempSync(join(tmpdir(), "control-shot-")) } = {}) {
   mkdirSync(join(dir, "scripts"));
   const src = readFileSync(template, "utf8");
   const patched = app ? src.replace("const APP = { start: null, url: null, expect: null };", `const APP = ${JSON.stringify({ expect: "MYAPP", ...app })};`) : src;
@@ -101,8 +100,8 @@ function screenshot(app, { env = {}, pw = true, route = "/", extra = [] } = {}) 
 
 // Runs `screenshot` without blocking the event loop, so an in-process server can answer.
 // `route: null` omits the route argument.
-async function runShot(app, { extra = [], cwd, route = "/" } = {}) {
-  const dir = shotProject(app, { pw: true });
+async function runShot(app, { extra = [], cwd, route = "/", dir: given } = {}) {
+  const dir = shotProject(app, { pw: true, dir: given });
   const child = spawn("node", [join(dir, "scripts", "control.mjs"), "screenshot", ...(route === null ? [] : [route]), ...extra, "--json"], { cwd: cwd ?? dir });
   let stdout = "";
   child.stdout.on("data", (d) => (stdout += d));
@@ -110,17 +109,19 @@ async function runShot(app, { extra = [], cwd, route = "/" } = {}) {
   return { status, out: JSON.parse(stdout), dir };
 }
 
-// Serves `body` (a string, or a (req, res) handler) on a free port, then runs `screenshot` against it.
+// Serves `body` (a string, or a self-contained (req, res) handler) on a free port from a child process whose cwd is the project,
+// as a real dev server would, then runs `screenshot` against it.
 async function shotAgainst(body, app = {}, opts = {}) {
-  const server = createServer(typeof body === "function" ? body : (_, res) => res.end(body)).listen(0, "127.0.0.1");
+  const dir = mkdtempSync(join(tmpdir(), "control-shot-"));
+  const handler = typeof body === "function" ? body.toString() : `(_, res) => res.end(${JSON.stringify(body)})`;
+  const server = spawn("node", ["-e", `const s = require('http').createServer(${handler}).listen(0, '127.0.0.1', () => console.log(s.address().port))`], { cwd: dir });
   try {
-    await new Promise((r) => server.once("listening", r));
-    const url = `http://127.0.0.1:${server.address().port}`;
-    const r = await runShot({ start: null, url, ...app }, opts);
+    const port = await new Promise((r) => server.stdout.once("data", (d) => r(Number(d))));
+    const url = `http://127.0.0.1:${port}`;
+    const r = await runShot({ start: null, url, ...app }, { ...opts, dir });
     return { ...r, stillUp: await fetch(url).then(() => true, () => false) };
   } finally {
-    server.closeAllConnections();
-    server.close();
+    server.kill();
   }
 }
 
@@ -177,10 +178,8 @@ describe("screenshot", () => {
     assert.equal(gone(pid), true);
   });
   it("captures / when no route is given, into one fixed file per project", async () => {
-    let path;
-    const r = await shotAgainst((req, res) => { path = req.url; res.end("<title>MYAPP</title>"); }, {}, { route: null });
+    const r = await shotAgainst((req, res) => res.end(req.url === "/" ? "<title>MYAPP</title>" : "wrong route"), {}, { route: null });
     assert.equal(r.status, 0);
-    assert.equal(path, "/");
     assert.equal(r.out.file, join(tmpdir(), `${basename(r.dir)}-screenshot.png`));
   });
   it("writes a relative --out into the caller's directory, as an absolute path", async () => {
@@ -241,6 +240,52 @@ describe("screenshot", () => {
     const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { extra: ["--wait", "99999999999999999999"] });
     assert.equal(r.status, 1);
     assert.match(JSON.parse(r.stdout).error, /--wait/);
+  });
+  for (const port of ["abc", "70000"]) {
+    it(`rejects --port ${port}`, () => {
+      const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { extra: ["--port", port] });
+      assert.equal(r.status, 1);
+      assert.match(JSON.parse(r.stdout).error, /--port/);
+    });
+  }
+  it("with --port and nothing listening, asks for this checkout's server and does not run APP.start", async () => {
+    const probe = createServer().listen(0, "127.0.0.1");
+    await new Promise((r) => probe.once("listening", r));
+    const port = probe.address().port;
+    await new Promise((r) => probe.close(r));
+    const marker = join(mkdtempSync(join(tmpdir(), "control-marker-")), "started");
+    const r = await runShot({ start: ["node", "-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, '')`], url: "http://127.0.0.1:1" }, { extra: ["--port", String(port)] });
+    assert.equal(r.status, 1);
+    assert.match(r.out.detail, /start this checkout's dev server on port/);
+    assert.equal(existsSync(marker), false);
+  });
+  const hasLsof = !spawnSync("lsof", ["-v"]).error;
+  it("refuses a server running from another checkout, naming its directory", { skip: !hasLsof }, async () => {
+    const server = createServer((_, res) => res.end("<title>MYAPP</title>")).listen(0, "127.0.0.1");
+    await new Promise((r) => server.once("listening", r));
+    try {
+      const r = await runShot({ start: null, url: `http://127.0.0.1:${server.address().port}` });
+      assert.equal(r.status, 1);
+      assert.equal(r.out.error, "other checkout");
+      assert.ok(r.out.detail.includes(realpathSync(process.cwd())));
+      assert.match(r.out.detail, /--port/);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+  it("accepts a server running from this project on the --port port", { skip: !hasLsof }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "control-shot-"));
+    const server = spawn("node", ["-e", `const s = require('http').createServer((_, res) => res.end('<title>MYAPP</title>')).listen(0, '127.0.0.1', () => console.log(s.address().port))`], { cwd: dir });
+    try {
+      const port = await new Promise((res) => server.stdout.once("data", (d) => res(Number(d))));
+      const o = await runShot({ start: null, url: "http://127.0.0.1:1" }, { dir, extra: ["--port", String(port)] });
+      assert.notEqual(o.out.error, "other checkout");
+      assert.equal(o.status, 0);
+      assert.equal(new URL(o.out.url).port, String(port));
+    } finally {
+      server.kill();
+    }
   });
   it("kills the server it started when interrupted", async () => {
     const pidFile = join(mkdtempSync(join(tmpdir(), "control-pid-")), "pid");
