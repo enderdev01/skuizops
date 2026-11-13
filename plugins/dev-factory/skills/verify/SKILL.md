@@ -18,7 +18,7 @@ If the project has no `scripts/control.mjs`, use the verify command named in its
 node scripts/control.mjs doctor
 ```
 
-Every check must be `ok`. A `FAIL` line says exactly what to run to fix it.
+Run it when verify or a check fails for an environment reason, not every time. Every check must be `ok`. A `FAIL` line says exactly what to run to fix it.
 
 ## 2. Static gate
 
@@ -32,9 +32,9 @@ Green is required, not sufficient.
 
 1. Find the feature in the project's feature map, `.claude/verification/features/README.md`.
 2. Use the `scripts/control.mjs` command listed there, with the request's example input.
-3. Try the edge cases listed in the feature's file next to the README, plus any the request names.
+3. Try the edge cases the brief or request names, plus the ones listed in the feature's file next to the README when they touch the change.
 
-If the feature is not in the map, add it (see "Keeping this skill current").
+If the feature is not in the map, add it (see "Keeping this skill current"). A read-only verifier (cherry) reports it as missing instead, and the orchestrator adds it.
 
 ## 4. Visual check
 

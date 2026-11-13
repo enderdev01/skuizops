@@ -86,6 +86,7 @@ describe("commandViolation", () => {
     "sed -i s/a/b/ .githooks/pre-commit",
     "chmod -x .githooks/pre-commit",
     "cp x .githooks/pre-commit",
+    "ln -s x .githooks/pre-commit",
     `mkdir -p ${cache}/x`,
     'rm .g""it/config',
     "cd .githooks; rm pre-commit",
@@ -207,7 +208,7 @@ describe("marketplace source repo", () => {
 
 describe("cherry is read-only on the project", () => {
   const run = (c, readOnly = true) => commandViolation(c, { project, cwd: project, env, readOnly });
-  for (const c of ["echo x > src/a.ts", "sed -i s/a/b/ src/a.ts", "git stash", "git stash push poi.ts", "git checkout -- poi.ts", "cd sub && rm f", "git worktree remove /tmp/x",
+  for (const c of ["echo x > src/a.ts", "sed -i s/a/b/ src/a.ts", "git stash", "git stash push poi.ts", "git checkout -- poi.ts", "cd sub && rm f", "git worktree remove /Users/ada/DEV/app-worktrees/x", "git worktree remove --force .", 'git worktree remove --force "$(pwd)/wt"',
     "git am x.patch", "git pull", "git update-index --assume-unchanged a", "git update-ref -d refs/x", "git tag v1", "git tag -d v1",
     "git branch -d x", "git branch -D x", "git branch -f x", "git branch -m a b", "git branch -M a b", "git branch newname",
     "echo x > $PWD/README.md", "echo x > ${PWD}/README.md", "echo x &> src/a.ts", "echo x >&src/a.ts", "echo x &>> src/a.ts",
@@ -215,17 +216,23 @@ describe("cherry is read-only on the project", () => {
     "sed -i --file=/tmp/s README.md", "sed -i -f/tmp/s README.md",
     'echo x > "$(pwd)/README.md"', 'rm -rf "$(pwd)/plugins"', 'echo x > "$(git rev-parse --show-toplevel)/README.md"',
     'cd "$(git rev-parse --show-toplevel)" && git stash', "cd $(pwd) && git stash",
-    `cd /tmp && git --git-dir=${project}/.git --work-tree=${project} stash`]) {
+    `cd /tmp && git --git-dir=${project}/.git --work-tree=${project} stash`,
+    "cat > src/a.ts <<'EOF'\nx\nEOF", 'echo "<<X"\nrm -rf src', "echo '<<X'\nrm src\nX", "cat > /tmp/x <<EOF\nrm src", "cat > /tmp/x <<EOF\n$(rm -rf src)\nEOF", "cat > /tmp/x <<EOF\n`rm -rf src`\nEOF",
+    "ln -s /tmp/a src/link", "ln -s /tmp/a", "ln -s /tmp/a -t src", "ln -s /tmp/a --target-directory=src", "ln -s /tmp/a -tsrc"]) {
     it(`blocks ${c}`, () => assert.match(run(c), /read-only on the project/));
   }
-  for (const c of ["cat src/a.ts", "git diff", "git status", "node scripts/control.mjs verify", "echo x > $TMPDIR/foo", "git worktree add /tmp/somewhere",
+  for (const c of ["cat src/a.ts", "git diff", "git status", "node scripts/control.mjs verify", "echo x > $TMPDIR/foo", "git worktree add /tmp/somewhere", "git worktree remove --force /tmp/x", 'git worktree remove --force "$W"', `git worktree remove ${tmpdir()}/tmp.abc`,
     "node scripts/control.mjs verify 2>&1 | tail -40", "npm test 2>&1", "ls >/dev/null 2>&1", "echo x >&2", "echo x >&-",
     'node -e "console.log([1].map(x=>x+1))"', "echo err >&2",
     'git worktree add "$(mktemp -d)"', 'D=$(mktemp -d) && cp -R . "$D/repo"',
     'cp -R /some/dir "$(mktemp -d)"', 'cp -R . "$(mktemp -d)"', "sed -i '' s/a/b/ /tmp/wt/README.md", "sed -i -e s/a/b/ /tmp/wt/README.md",
     "perl -pi -e 's/a/b/' /tmp/wt/README.md", "sed -i s/a/b/ /tmp/wt/a.md", 'cd "$(mktemp -d)" && git stash',
     "git -C /tmp/wt checkout HEAD -- README.md", "cd /tmp/wt && git stash", "git stash list", "git stash show",
-    "git tag", "git tag -l", "git branch", "git branch --list", "git branch -a"]) {
+    "git tag", "git tag -l", "git branch", "git branch --list", "git branch -a",
+    "S=/var/folders/x/T/tmp.Q; cat > $S/probe.test.ts <<'EOF'\nconst f = (p) => { return p; };\nEOF",
+    'cat > "$(mktemp -d)/x" <<\'EOF\'\nconst f = (p) => p;\nif (a) > { b }\nEOF',
+    'cat > /tmp/x <<EOF\na => b\nEOF\ncat > /tmp/y <<-"END"\n\t$(rm -rf src)\n\tEND',
+    `ln -s ${project}/node_modules /tmp/wt/node_modules`, `ln -s ${project}/a -t /tmp/wt`]) {
     it(`allows ${c}`, () => assert.equal(run(c), null));
   }
   it("still checks the sed/perl file operands, not the script", () => {

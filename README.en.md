@@ -88,7 +88,7 @@ The plugin also splits the work, so the expensive model is used only where it is
 | 🥝 `kiwi` | Haiku (cheap) | Searches the code, never edits | Before touching unfamiliar code |
 | 🫐 `fig` | Haiku (cheap) | Reads long test and build output | When something fails |
 | 🥭 `mango` | Sonnet (mid) | Implements a well-defined task | When what to build is already clear |
-| 🍒 `cherry` | Opus (expensive) | Checks that the change works, with evidence | After an important change |
+| 🍒 `cherry` | Sonnet (Opus when risky) | Checks that the change works, with evidence | After an important change |
 
 Full detail on rules, scope and the trust model: [plugins/dev-factory/README.md](plugins/dev-factory/README.md).
 

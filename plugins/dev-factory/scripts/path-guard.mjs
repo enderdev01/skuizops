@@ -7,8 +7,9 @@
 // .claude/settings*.json, in any project.
 // The human edits these by hand.
 import { globSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { fold, inScope, isMain, projectDir, scopeRoots, trustFile, under } from "./scope.mjs";
+import { fold, inScope, isMain, projectDir, real, scopeRoots, trustFile, under } from "./scope.mjs";
 
 const PROFILES = [".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".profile"];
 
@@ -45,7 +46,7 @@ export function editViolation(file, project, env = process.env) {
   return guarded ? `${file} enforces the branch and commit policy. Agents cannot change it: ask the human to edit it.` : null;
 }
 
-const WRITES_ALL_ARGS = ["rm", "rmdir", "mv", "tee", "touch", "chmod", "chown", "chflags", "truncate", "unlink", "mkdir", "ln"];
+const WRITES_ALL_ARGS = ["rm", "rmdir", "mv", "tee", "touch", "chmod", "chown", "chflags", "truncate", "unlink", "mkdir"];
 const GIT_WRITES = ["checkout", "restore", "rm", "mv", "clean", "apply", "stash", "reset", "switch"];
 // Subcommands that rewrite a whole tree: the directory git runs in is what gets written.
 const GIT_TREE_WIDE = ["stash", "clean", "reset", "checkout", "restore", "switch"];
@@ -63,6 +64,31 @@ const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
 const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST)\b/.test(unquote(w));
 const subst = (w) => /^\$SUBST/.test(unquote(w));
+
+// Heredoc bodies are data, not shell: drop them, but an unquoted one still runs `$(...)` and backticks, so keep those as lines.
+// `<<` inside quotes is text; an unterminated heredoc is not one we understand, so nothing is dropped (fail closed).
+function stripHeredocs(command) {
+  const out = [];
+  let pending = [], q = null;
+  for (const line of command.split("\n")) {
+    if (pending.length) {
+      const { word, dash, quoted } = pending[0];
+      if ((dash ? line.replace(/^\t+/, "") : line) === word) pending.shift();
+      else if (!quoted) out.push(...(line.match(/\$\(.*\)|`[^`]*`/g) ?? []));
+      continue;
+    }
+    out.push(line);
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === "\\" && q !== "'") { i++; continue; }
+      if (q) { if (c === q) q = null; continue; }
+      if (c === "'" || c === '"') { q = c; continue; }
+      const m = line[i - 1] !== "<" && /^<<(-?)\s*(["']?)([\w.-]+)\2/.exec(line.slice(i));
+      if (m) { pending.push({ dash: !!m[1], quoted: !!m[2], word: m[3] }); i += m[0].length - 1; }
+    }
+  }
+  return pending.length ? command : out.join("\n");
+}
 
 // `>` inside quotes is text, not a redirect: hide it (\u0001) until the words are read. `$(...)` inside "..." stays code.
 function hideQuotedRedirects(s) {
@@ -163,6 +189,13 @@ function writtenWords(words) {
   if ((name === "sed" || name === "perl") && args.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return scriptFiles(args, name);
   if (name === "dd") return args.filter((a) => a.startsWith("of=")).map((a) => a.slice(3));
   if (["cp", "rsync", "install"].includes(name)) return operands(args).slice(-1);
+  if (name === "ln") {
+    // Only the link location is written: -t DIR, else the last operand, else (one operand) its basename in the cwd.
+    const t = args.findIndex((a) => /^(-t|--target-directory)(=|$)|^-t./.test(a));
+    if (t >= 0) return [/^--target-directory=|^-t./.test(args[t]) ? args[t].replace(/^--target-directory=|^-t/, "") : args[t + 1]].filter(Boolean);
+    const ops = operands(args);
+    return ops.length > 1 ? ops.slice(-1) : ops.map((w) => basename(unquote(w)));
+  }
   const git = gitCall(words);
   if (git && GIT_WRITES.includes(git.sub) && !stashReads(git)) return [...operands(git.rest), ...(GIT_TREE_WIDE.includes(git.sub) ? ["."] : [])];
   return [];
@@ -173,7 +206,7 @@ function writtenWords(words) {
 // readOnly (cherry): nothing under the project changes and git does not touch the tree or refs.
 export function commandViolation(command, { project, cwd, env = process.env, readOnly = false } = {}) {
   readOnly = readOnly && inScope(project, env);
-  const flat = hideQuotedRedirects(command)
+  const flat = hideQuotedRedirects(stripHeredocs(command))
     .replace(/\d*>&(\d+|-)(?![^\s;&|)<>])/g, " ") // `2>&1`, `>&-`: fd duplication, not a file
     .replace(/&>>?|>[|&]/g, ">"); // `&>`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
   const inner = [];
@@ -198,6 +231,9 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
     if (["cd", "pushd"].includes(words[0])) here = dirOf(words[1] ?? "~", here);
     const git = gitCall(words);
     const base = git ? git.dirs.reduce((dir, d) => dirOf(d, dir), here) : here;
+    // cherry may drop its own mktemp copies: a worktree under the temp dir (or behind a $VAR, see unknownVar) holds no one's work.
+    const tempCopy = (w) => !!w && (unknownVar(w) || [env.TMPDIR ?? tmpdir(), "/tmp"].some((t) => under(fold(real(dirOf(w, base))), fold(real(t)))));
+    if (readOnly && git?.sub === "worktree" && git.rest[0] === "remove" && tempCopy(git.rest.slice(1).find((a) => !a.startsWith("-")))) continue;
     if (readOnly && git && under(fold(base), fold(project)) && gitMutates(git)) return CHERRY_MSG;
     for (const [word, from] of [...redirects.map((w) => [w, here]), ...writtenWords(words).map((w) => [w, base])]) {
       if (!unquote(word) || (readOnly ? unknownVar(word) : subst(word))) continue;

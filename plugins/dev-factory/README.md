@@ -11,7 +11,7 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 | `fig` | Haiku | Log reader: reports each test, build and lint failure |
 | `mango` | Sonnet | Builder: implements one well-specified unit |
 | `lemon` | Session model | Orchestrator: the main session in set-up projects, delegates on its own |
-| `cherry` | Opus | Inspector: independently verifies a change, with evidence |
+| `cherry` | Sonnet (Opus for risky changes) | Inspector: independently verifies a change, with evidence |
 
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
 Hooks: branch guard on Bash, a protected-files guard on Edit, Write and Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.

@@ -88,7 +88,7 @@ El plugin también reparte el trabajo: el modelo caro solo se usa donde hace fal
 | 🥝 `kiwi` | Haiku (barato) | Busca en el código, sin editar | Antes de tocar algo desconocido |
 | 🫐 `fig` | Haiku (barato) | Lee salidas largas de tests y builds | Cuando algo falla |
 | 🥭 `mango` | Sonnet (medio) | Implementa una tarea bien definida | Cuando ya se sabe qué construir |
-| 🍒 `cherry` | Opus (caro) | Comprueba que el cambio funciona, con evidencia | Al terminar un cambio importante |
+| 🍒 `cherry` | Sonnet (Opus si es riesgoso) | Comprueba que el cambio funciona, con evidencia | Al terminar un cambio importante |
 
 Detalle completo de reglas, alcance y modelo de confianza: [plugins/dev-factory/README.md](plugins/dev-factory/README.md) (en inglés).
 
