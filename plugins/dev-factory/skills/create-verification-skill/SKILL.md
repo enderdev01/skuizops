@@ -14,6 +14,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 2. **Create the control CLI.**
    - Copy the template, quoting the path because it may contain spaces: `cp "${CLAUDE_PLUGIN_ROOT}/templates/control.mjs" scripts/control.mjs`.
+   - For projects with screens: find the dev server script and its URL by reading package.json and the framework config (do not guess), and fill `APP` at the top of `scripts/control.mjs`. If Playwright is not installed, give the human `npm i -D playwright && npx playwright install chromium` and wait; do not install it unasked.
    - Add one subcommand per user-facing feature, following the template's placeholder. CLI design rules:
      - `--json` on every command;
      - `--dry-run` on every destructive command;
@@ -23,7 +24,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
      - exit 0 on success, 1 on failure.
 
 3. **Write the feature map** in `.claude/verification/features/`.
-   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command.
+   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command. Screens get rows whose cell is `node scripts/control.mjs screenshot <route>`.
    - One file per feature (linked from the Details column) with a table of expected input and output, plus the edge cases (empty, very large, invalid input).
    - Fill the tables by running each command and recording what you observe. Never invent expected output.
 
@@ -52,4 +53,4 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 7. **Document it.** Add the `doctor` and `verify` commands and the branch policy to the project's AGENTS.md, and point to the feature map.
 
-Report: files created or changed (including `.gitignore`), the observed output of `doctor` and `verify`, the number of features catalogued, and the pre-existing failures you left untouched.
+Report: files created or changed (including `.gitignore`), the observed output of `doctor` and `verify`, the number of features catalogued, whether the `screenshot` command works, and the pre-existing failures you left untouched.

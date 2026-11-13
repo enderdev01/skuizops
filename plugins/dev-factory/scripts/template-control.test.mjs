@@ -1,8 +1,8 @@
 // Tests for templates/control.mjs: copy it into a throwaway project and run `doctor --json`.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,5 +74,95 @@ describe("doctor: git hooks", () => {
     const check = hooksCheck({ hooksPath: null });
     assert.equal(check.ok, false);
     assert.equal(check.fix, "git config core.hooksPath .githooks");
+  });
+});
+
+// Copies the template into a temp project, optionally patching its APP line and stubbing the project's Playwright.
+function shotProject(app, { pw = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "control-shot-"));
+  mkdirSync(join(dir, "scripts"));
+  const src = readFileSync(template, "utf8");
+  const patched = app ? src.replace("const APP = { start: null, url: null };", `const APP = ${JSON.stringify(app)};`) : src;
+  assert.notEqual(patched === src, Boolean(app));
+  writeFileSync(join(dir, "scripts", "control.mjs"), patched);
+  if (pw) {
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", ".bin", "playwright"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  }
+  return dir;
+}
+
+// Runs `screenshot <route> ...extra --json` in a fresh project.
+function screenshot(app, { env = {}, pw = true, route = "/", extra = [] } = {}) {
+  const dir = shotProject(app, { pw });
+  return spawnSync("node", ["scripts/control.mjs", "screenshot", route, ...extra, "--json"], { cwd: dir, encoding: "utf8", env: { ...process.env, ...env } });
+}
+
+const gone = (pid) => {
+  try { process.kill(pid, 0); return false; } catch { return true; }
+};
+
+describe("screenshot", () => {
+  it("fails and points at APP when it is not set", () => {
+    const r = screenshot(null);
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).error, /APP/);
+  });
+  it("fails fast when the start command exits and the url never answers", () => {
+    const r = screenshot({ start: ["node", "-e", ""], url: "http://127.0.0.1:1" }, { env: { CONTROL_START_TIMEOUT_MS: "1500" } });
+    assert.equal(r.status, 1);
+    assert.equal(JSON.parse(r.stdout).error, "app did not start");
+  });
+  it("fails at once, with its output, when the start command dies", () => {
+    const t = Date.now();
+    const r = screenshot({ start: ["node", "-e", "console.error('boom'); process.exit(3)"], url: "http://127.0.0.1:1" });
+    assert.equal(r.status, 1);
+    assert.ok(Date.now() - t < 5000);
+    assert.match(r.stdout, /boom/);
+  });
+  it("names the install hint and starts no server when Playwright is missing", () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "control-marker-")), "started");
+    const r = screenshot({ start: ["node", "-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, '')`], url: "http://127.0.0.1:1" }, { pw: false });
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).fix, /npm i -D playwright && npx playwright install chromium/);
+    assert.equal(existsSync(marker), false);
+  });
+  it("rejects a non-numeric --wait", () => {
+    const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { extra: ["--wait", "abc"] });
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).error, /--wait/);
+  });
+  it("rejects a bare --wait", () => {
+    const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { extra: ["--wait"] });
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).error, /--wait/);
+  });
+  it("rejects a non-numeric CONTROL_START_TIMEOUT_MS", () => {
+    const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { env: { CONTROL_START_TIMEOUT_MS: "abc" } });
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).error, /CONTROL_START_TIMEOUT_MS/);
+  });
+  for (const route of ["http://other/", "//other/", "/\\other/"]) {
+    it(`rejects a route that leaves APP's origin: ${route}`, () => {
+      const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { route });
+      assert.equal(r.status, 1);
+      assert.match(JSON.parse(r.stdout).error, /route/);
+    });
+  }
+  it("rejects a --wait too large for the Playwright timeout", () => {
+    const r = screenshot({ start: null, url: "http://127.0.0.1:1" }, { extra: ["--wait", "99999999999999999999"] });
+    assert.equal(r.status, 1);
+    assert.match(JSON.parse(r.stdout).error, /--wait/);
+  });
+  it("kills the server it started when interrupted", async () => {
+    const pidFile = join(mkdtempSync(join(tmpdir(), "control-pid-")), "pid");
+    const dir = shotProject({ start: ["node", "-e", `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)`], url: "http://127.0.0.1:1" }, { pw: true });
+    const child = spawn("node", ["scripts/control.mjs", "screenshot", "/", "--json"], { cwd: dir, stdio: "ignore" });
+    for (let i = 0; i < 50 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 100));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    child.kill("SIGTERM");
+    for (let i = 0; i < 30 && !gone(pid); i++) await new Promise((r) => setTimeout(r, 100));
+    if (!gone(pid)) process.kill(pid, "SIGKILL");
+    assert.equal(gone(pid), true);
   });
 });

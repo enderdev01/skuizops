@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Verification CLI: the lever agents use to check their own work.
 // Every command supports --json. Exit 0 on success, 1 on failure.
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,11 +12,18 @@ const argv = process.argv.slice(2);
 const json = argv.includes("--json");
 const args = argv.filter((a) => a !== "--json");
 
+// Filled by create-verification-skill, e.g. { start: ["npm", "run", "dev"], url: "http://localhost:5173" }
+const APP = { start: null, url: null };
+
 const HELP = `Usage: node scripts/control.mjs <command> [--json]
 
 Commands:
   doctor    Check the environment is ready (node, deps, git hooks, branch)
   verify    Run the project's typecheck, lint and test npm scripts that exist; report each step
+
+  screenshot <route> [--out <file.png>] [--wait <ms>] [--full-page]
+            Headless screenshot of a route of the app (needs APP set and Playwright installed in the project)
+            Example: node scripts/control.mjs screenshot /settings --full-page
 
 Every command exits 0 on success and 1 on failure. Add --json for machine-readable output.`;
 
@@ -114,6 +122,82 @@ function verify() {
   report(ok, { steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const answers = (url) => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
+
+const PW_HINT = "npm i -D playwright && npx playwright install chromium";
+const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+
+async function screenshot(lineArgs) {
+  const flag = (name) => (lineArgs.includes(name) ? lineArgs[lineArgs.indexOf(name) + 1] : undefined);
+  const route = lineArgs.find((a, i) => !a.startsWith("--") && !["--out", "--wait"].includes(lineArgs[i - 1])) ?? "/";
+  if (!APP.url) {
+    report(false, { error: "APP not set" }, "FAIL APP is not set  ->  set APP = { start, url } in scripts/control.mjs (see the create-verification-skill skill)");
+  }
+  const invalid = (error) => report(false, { error }, `FAIL ${error}`);
+  const wait = flag("--wait");
+  // Capped below the 120 s Playwright timeout; huge values also overflow Node timers.
+  if (lineArgs.includes("--wait") && !/^\d{1,5}$/.test(wait ?? "")) invalid(`--wait needs a number of milliseconds up to 99999, got "${wait ?? ""}"`);
+  // The origin check also catches "//host" and "/\host", which URL parsing sends to another host.
+  if (!route.startsWith("/") || new URL(route, APP.url).origin !== new URL(APP.url).origin) invalid(`route must be a path starting with a single "/", got "${route}"`);
+  const timeoutEnv = process.env.CONTROL_START_TIMEOUT_MS;
+  if (timeoutEnv !== undefined && !/^[1-9]\d*$/.test(timeoutEnv)) invalid(`CONTROL_START_TIMEOUT_MS must be a positive number of milliseconds, got "${timeoutEnv}"`);
+  // The project's own binary: npx would silently fall back to a global Playwright.
+  const pwBin = join(root, "node_modules", ".bin", "playwright");
+  if (!existsSync(pwBin)) {
+    report(false, { error: "Playwright is not installed in this project", fix: PW_HINT }, `FAIL Playwright is not installed in this project  ->  ${PW_HINT}`);
+  }
+  const target = new URL(route, APP.url).href;
+  const out = flag("--out") ?? join(mkdtempSync(join(tmpdir(), "screenshot-")), "screenshot.png");
+  let server = null;
+  let pwChild = null;
+  let exited = false;
+  let log = "";
+  const tail = () => log.trim().split("\n").slice(-10).join("\n");
+  // Only ever kills a server this run started.
+  const stop = () => {
+    if (pwChild?.pid && pwChild.exitCode === null) try { process.kill(-pwChild.pid, "SIGKILL"); } catch {}
+    if (server?.pid && !exited) try { process.kill(-server.pid, "SIGKILL"); } catch {}
+  };
+  const fail = (error, text) => {
+    stop();
+    report(false, { error, detail: text }, `FAIL ${text}`);
+  };
+  for (const [sig, code] of Object.entries(SIGNALS)) process.on(sig, () => { stop(); process.exit(code); });
+  if (!(await answers(APP.url))) {
+    if (!APP.start) fail("app not running", `${APP.url} does not answer and APP.start is not set  ->  start the app or set APP.start in scripts/control.mjs`);
+    server = spawn(APP.start[0], APP.start.slice(1), { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    server.on("error", (e) => { log += `${e.message}\n`; exited = true; });
+    server.on("exit", () => (exited = true));
+    for (const stream of [server.stdout, server.stderr]) stream.on("data", (d) => (log += d));
+    const deadline = Date.now() + Number(timeoutEnv ?? 60000);
+    let up = false;
+    while (!up && !exited && Date.now() < deadline) {
+      await sleep(500);
+      up = await answers(APP.url);
+    }
+    if (!up && exited) fail("app did not start", `"${APP.start.join(" ")}" exited before ${APP.url} answered  ->  last output:\n${tail()}`);
+    if (!up) fail("app did not start", `${APP.url} did not answer after starting "${APP.start.join(" ")}"  ->  last output:\n${tail()}`);
+  }
+  const pw = await new Promise((resolve) => {
+    // Own process group so an interrupt can kill Playwright and its browser together.
+    const child = (pwChild = spawn(pwBin, ["screenshot", ...(lineArgs.includes("--full-page") ? ["--full-page"] : []), ...(wait ? ["--wait-for-timeout", wait] : []), target, out], { cwd: root, detached: true }));
+    let output = "";
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, "SIGKILL"); } catch {} }, 120000);
+    for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (output += d));
+    child.on("error", (e) => { output += e.message; });
+    child.on("close", (status) => { clearTimeout(timer); resolve({ ok: status === 0, output: timedOut ? `${output}\nPlaywright timed out after 120s` : output }); });
+  });
+  stop();
+  if (!pw.ok) {
+    const msg = pw.output.trim();
+    const missing = /Executable doesn't exist|playwright install/i.test(msg);
+    report(false, { error: msg, ...(missing ? { fix: PW_HINT } : {}) }, `FAIL screenshot of ${target}  ->  ${missing ? `Playwright browser is missing: ${PW_HINT}` : msg.split("\n").slice(-10).join("\n")}`);
+  }
+  report(true, { url: target, file: out }, `ok screenshot ${target} -> ${out}`);
+}
+
 // Add one function per user-facing feature, then register it below. Example:
 //
 // function greet(lineArgs) {
@@ -128,6 +212,7 @@ function verify() {
 const [command, ...rest] = args;
 if (command === "doctor") await doctor();
 else if (command === "verify") verify();
+else if (command === "screenshot") await screenshot(rest);
 else {
   process.stdout.write(`${HELP}\n`);
   process.exit(command && command !== "--help" && command !== "help" ? 1 : 0);
