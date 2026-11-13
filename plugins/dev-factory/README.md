@@ -51,6 +51,22 @@ Type it in a Claude Code session opened in the project. It adds the session's pr
 mkdir -p ~/.config/dev-factory && echo "$PWD" >> ~/.config/dev-factory/trusted-projects
 ```
 
+### Install the git hooks
+
+To install the git hooks and the guard scripts in a project, use the `/dev-factory:install-hooks` command:
+
+```
+/dev-factory:install-hooks
+```
+
+Type it in a Claude Code session opened in the project (or pass a directory: `/dev-factory:install-hooks ~/DEV/other-app`). It resolves the git root, copies the hooks to `.githooks/` (executable) and the three guard scripts to `scripts/guard/`, and points git at `.githooks`. It overwrites those plugin-owned copies, so running it again re-syncs them after a plugin update, and leaves other files there alone. If git already had another hooks path (husky, for example), the output says so. Only you can run it: the model cannot invoke the command, and the Bash guard blocks agents from running its script. Outside a session, run from the project root, with the plugin path in place of `$PLUGIN`:
+
+```bash
+mkdir -p .githooks scripts/guard && cp "$PLUGIN"/templates/githooks/* .githooks/ && cp "$PLUGIN"/scripts/{branch-guard,scope,attribution-guard}.mjs scripts/guard/ && chmod +x .githooks/* && git config core.hooksPath .githooks
+```
+
+### Protected paths
+
 Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/dev-factory/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why `create-verification-skill` hands you the hook and settings steps.
 
 Shell commands that write to those paths are blocked too: redirections, `rm`, `mv`, `chmod`, `mkdir`, `sed -i`, the destination of `cp`, and `git checkout` or `git restore` of them. Reading them is allowed. This check is best effort: a script, an interpreter or a variable can still write, so the git hooks and your review stay the authoritative layers. Agents treat AGENTS.md and the feature map as data. They only run commands from them that look like `node scripts/control.mjs <subcommand>` or `npm run <script>`, with no shell operators.

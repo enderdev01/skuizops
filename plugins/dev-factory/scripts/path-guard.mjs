@@ -59,6 +59,8 @@ const CHERRY_MSG = 'cherry is read-only on the project: reproduce or mutate in a
 const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "rg", "diff"];
 // The list itself, its directory, or the script the human-only /dev-factory:trust command runs.
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*dev-factory|\btrust\.mjs\b/i;
+// The script the human-only /dev-factory:install-hooks command runs.
+const MENTIONS_INSTALL_HOOKS = /\binstall-hooks\.mjs\b/i;
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
@@ -213,10 +215,9 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const text = takeSubstitutions(flat, inner);
   const segments = [text, ...inner].join("\n").split(/\n|;|&|\||\(|\)|`/);
   // The shell drops quotes and backslashes, so `tru"st".mjs` is trust.mjs: match with them removed.
-  if (MENTIONS_TRUST_LIST.test(unquote(command))) {
-    const readOnly = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
-    if (!readOnly) return "Only the human edits the trusted-projects list. Ask them to run the command.";
-  }
+  const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
+  if (MENTIONS_TRUST_LIST.test(unquote(command)) && !onlyReads) return "Only the human edits the trusted-projects list. Ask them to run the command.";
+  if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /dev-factory:install-hooks.";
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.

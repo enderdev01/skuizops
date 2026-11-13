@@ -138,6 +138,13 @@ describe("commandViolation", () => {
   it("blocks an interpreter one-liner mentioning the trust list", () =>
     assert.ok(check(`node -e "require('fs').appendFileSync('${trust}','y')"`)));
 
+  it("blocks running install-hooks.mjs, however the name is spelled", () => {
+    for (const c of ["node /p/scripts/install-hooks.mjs", 'node "$CLAUDE_PLUGIN_ROOT/scripts/install-hooks.mjs" /work/app', 'node /p/scripts/install-"hooks".mjs', "node /p/scripts/install-hooks\\.mjs"]) {
+      assert.match(check(c), /\/dev-factory:install-hooks/, c);
+    }
+  });
+  it("allows reading install-hooks.mjs", () => assert.equal(check("cat /p/scripts/install-hooks.mjs"), null));
+
   describe("entry point `bash`", () => {
     const script = fileURLToPath(new URL("./path-guard.mjs", import.meta.url));
     const outside = mkdtempSync(join(tmpdir(), "pg-out-"));
