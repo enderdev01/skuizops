@@ -146,12 +146,12 @@ describe("commandViolation", () => {
   it("allows reading install-hooks.mjs", () => assert.equal(check("cat /p/scripts/install-hooks.mjs"), null));
 
   it("blocks agents from running the one-command setup", () => {
-    for (const c of ["node bin/setup.mjs", "npx github:enderdev01/la-fruteria", "npx dev-factory-setup", 'node "./bin/set"up.mjs']) {
+    for (const c of ["node bin/setup.mjs", "npx github:enderdev01/la-fruteria", "npx dev-factory-setup", 'node "./bin/set"up.mjs', "cd /tmp && npx github:enderdev01/la-fruteria", "FOO=1 node bin/setup.mjs", "pnpm dlx github:enderdev01/la-fruteria", 'bash -c "npx github:enderdev01/la-fruteria"', "sh -c 'node bin/setup.mjs'", 'zsh -lc "cd /tmp && npx github:enderdev01/la-fruteria"', 'eval "npx github:enderdev01/la-fruteria"', `bash -c "bash -c 'npx github:enderdev01/la-fruteria'"`, "/usr/bin/env node bin/setup.mjs", "bash bin/setup.mjs", "npm x github:enderdev01/la-fruteria", "npm --yes exec github:enderdev01/la-fruteria"]) {
       assert.match(check(c), /npx github:enderdev01\/la-fruteria/, c);
     }
   });
   it("allows reading the setup", () => {
-    for (const c of ["cat bin/setup.mjs", "grep npx README.md enderdev01/la-fruteria"]) assert.equal(check(c), null, c);
+    for (const c of ["cat bin/setup.mjs", "grep npx README.md enderdev01/la-fruteria", "git switch -c x && grep -n trust bin/setup.mjs", "chmod 755 bin/setup.mjs", 'bash -c "grep -n x bin/setup.mjs"', 'gh pr create --title t --body "run npx github:enderdev01/la-fruteria"', 'git commit -m "docs: npx github:enderdev01/la-fruteria"']) assert.equal(check(c), null, c);
   });
 
   describe("entry point `bash`", () => {
