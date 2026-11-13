@@ -4,7 +4,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,8 +12,10 @@ const argv = process.argv.slice(2);
 const json = argv.includes("--json");
 const args = argv.filter((a) => a !== "--json");
 
-// Filled by create-verification-skill, e.g. { start: ["npm", "run", "dev"], url: "http://localhost:5173" }
-const APP = { start: null, url: null };
+// Filled by create-verification-skill, e.g. { start: ["npm", "run", "dev"], url: "http://localhost:5173", expect: "<title>My App</title>" }
+// `expect`: exact, case-sensitive text only this app's HTML contains (its <title>), so another app on the port is never captured.
+// Generic dev-server text like "/@vite/client" is not enough: any other Vite project on the same port has it too.
+const APP = { start: null, url: null, expect: null };
 
 const HELP = `Usage: node scripts/control.mjs <command> [--json]
 
@@ -125,6 +127,11 @@ function verify() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const answers = (url) => fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
 
+// { status, text } of a page, or null if it fails to load. Long timeout: SSR streams the body after the headers.
+const page = (url) => fetch(url, { signal: AbortSignal.timeout(15000) }).then(async (r) => ({ status: r.status, text: await r.text() }), () => null);
+const isApp = (p) => Boolean(p?.text.includes(APP.expect));
+const got = (p) => (p ? `HTTP ${p.status}` : "no page within 15s");
+
 const PW_HINT = "npm i -D playwright && npx playwright install chromium";
 const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
 
@@ -132,11 +139,16 @@ async function screenshot(lineArgs) {
   const flag = (name) => (lineArgs.includes(name) ? lineArgs[lineArgs.indexOf(name) + 1] : undefined);
   const route = lineArgs.find((a, i) => !a.startsWith("--") && !["--out", "--wait"].includes(lineArgs[i - 1])) ?? "/";
   if (!APP.url) {
-    report(false, { error: "APP not set" }, "FAIL APP is not set  ->  set APP = { start, url } in scripts/control.mjs (see the create-verification-skill skill)");
+    report(false, { error: "APP not set" }, "FAIL APP is not set  ->  set APP = { start, url, expect } in scripts/control.mjs (see the create-verification-skill skill)");
+  }
+  if (!APP.expect) {
+    report(false, { error: "APP.expect not set" }, "FAIL APP.expect is not set  ->  set it to text the app's HTML always contains (e.g. \"/@vite/client\" or its <title>) in scripts/control.mjs");
   }
   const invalid = (error) => report(false, { error }, `FAIL ${error}`);
   const wait = flag("--wait");
   // Capped below the 120 s Playwright timeout; huge values also overflow Node timers.
+  const outArg = flag("--out");
+  if (lineArgs.includes("--out") && (!outArg || outArg.startsWith("--"))) invalid(`--out needs a file path, got "${outArg ?? ""}"`);
   if (lineArgs.includes("--wait") && !/^\d{1,5}$/.test(wait ?? "")) invalid(`--wait needs a number of milliseconds up to 99999, got "${wait ?? ""}"`);
   // The origin check also catches "//host" and "/\host", which URL parsing sends to another host.
   if (!route.startsWith("/") || new URL(route, APP.url).origin !== new URL(APP.url).origin) invalid(`route must be a path starting with a single "/", got "${route}"`);
@@ -148,7 +160,8 @@ async function screenshot(lineArgs) {
     report(false, { error: "Playwright is not installed in this project", fix: PW_HINT }, `FAIL Playwright is not installed in this project  ->  ${PW_HINT}`);
   }
   const target = new URL(route, APP.url).href;
-  const out = flag("--out") ?? join(mkdtempSync(join(tmpdir(), "screenshot-")), "screenshot.png");
+  // Resolved from the caller's cwd (Playwright runs from the project root); absolute, so "-x.png" is never read as a flag.
+  const out = outArg ? resolve(outArg) : join(mkdtempSync(join(tmpdir(), "screenshot-")), "screenshot.png");
   let server = null;
   let pwChild = null;
   let exited = false;
@@ -164,6 +177,11 @@ async function screenshot(lineArgs) {
     report(false, { error, detail: text }, `FAIL ${text}`);
   };
   for (const [sig, code] of Object.entries(SIGNALS)) process.on(sig, () => { stop(); process.exit(code); });
+  const { port, protocol } = new URL(APP.url);
+  const home = (await answers(APP.url)) ? await page(APP.url) : null;
+  if (home && !isApp(home)) {
+    fail("port taken", `${APP.url} answers (${got(home)}) but its page does not contain APP.expect ("${APP.expect}"): another app holds the port, or the app is failing  ->  check what listens (lsof -nP -iTCP:${port || (protocol === "https:" ? 443 : 80)} -sTCP:LISTEN), stop it if it is not this app, then retry`);
+  }
   if (!(await answers(APP.url))) {
     if (!APP.start) fail("app not running", `${APP.url} does not answer and APP.start is not set  ->  start the app or set APP.start in scripts/control.mjs`);
     server = spawn(APP.start[0], APP.start.slice(1), { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -178,6 +196,8 @@ async function screenshot(lineArgs) {
     }
     if (!up && exited) fail("app did not start", `"${APP.start.join(" ")}" exited before ${APP.url} answered  ->  last output:\n${tail()}`);
     if (!up) fail("app did not start", `${APP.url} did not answer after starting "${APP.start.join(" ")}"  ->  last output:\n${tail()}`);
+    const started = await page(APP.url);
+    if (!isApp(started)) fail("not the app", `"${APP.start.join(" ")}" started but ${APP.url} (${got(started)}) does not contain APP.expect ("${APP.expect}")  ->  fix APP.expect or APP.url in scripts/control.mjs`);
   }
   const pw = await new Promise((resolve) => {
     // Own process group so an interrupt can kill Playwright and its browser together.

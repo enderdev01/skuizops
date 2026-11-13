@@ -14,7 +14,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
 
 2. **Create the control CLI.**
    - Copy the template, quoting the path because it may contain spaces: `cp "${CLAUDE_PLUGIN_ROOT}/templates/control.mjs" scripts/control.mjs`.
-   - For projects with screens: find the dev server script and its URL by reading package.json and the framework config (do not guess), and fill `APP` at the top of `scripts/control.mjs`. If Playwright is not installed, give the human `npm i -D playwright && npx playwright install chromium` and wait; do not install it unasked.
+   - For projects with screens: find the dev server script and its URL by reading package.json and the framework config (do not guess), and fill `APP` at the top of `scripts/control.mjs`. Set `APP.expect` to text only this app's HTML contains, usually its exact `<title>...</title>`: `screenshot` refuses to capture a port whose page lacks it. Do not use generic dev-server text like `/@vite/client`: another Vite project on the same port has it too. If Playwright is not installed, give the human `npm i -D playwright && npx playwright install chromium` and wait; do not install it unasked.
    - Add one subcommand per user-facing feature, following the template's placeholder. CLI design rules:
      - `--json` on every command;
      - `--dry-run` on every destructive command;
