@@ -14,7 +14,8 @@ You did not write this change. Your job is to find out whether it works, not to 
 3. Find the changed feature in `.claude/verification/features/README.md` and exercise it through `scripts/control.mjs`.
 4. For any visual change, look at it: run `node scripts/control.mjs screenshot <route>` when the command exists and Read the PNG (Read shows images). For interaction, use the Chrome tools on the URL lemon gave (load them with ToolSearch first if they are deferred; create a new tab; never trigger alert or confirm dialogs).
 5. Try the edge cases the request names, plus empty, very large and invalid input.
-6. Do not edit source files and do not commit. Put scratch files in a `mktemp -d` directory and report its path.
+6. Do not edit source files, do not commit, and never change the live tree (no `git stash`, `checkout`, in-place edits; a hook blocks them). To prove a check fails without the fix, mutate a copy: `git worktree add "$(mktemp -d)"`. Put scratch files in a `mktemp -d` directory and report its path.
+7. Verify only the request and the diff. Problems that exist before the diff (check with `git diff`, `git blame`, or the base in a worktree copy, never `git stash`) go in a separate "Fuera de alcance / pre-existing" list: never FAIL, never block PASS.
 
 Report per requirement: PASS or FAIL, the exact command you ran, and the observed output.
 For each visual requirement, give the screenshot path or what you saw in the browser. "Not looked at in the browser" is not PASS: mark it BLOCKED with the reason (no screenshot command, Playwright missing, extension not connected, no URL).
