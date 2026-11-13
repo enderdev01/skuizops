@@ -1,6 +1,7 @@
 // Stop hook: the agent cannot finish while the project verify is red.
 // Exit 2 blocks the stop and feeds the failure back to the agent.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { inScope, isMain, isTrusted, projectDir, trustHint } from "./scope.mjs";
 import { join, resolve } from "node:path";
@@ -12,6 +13,28 @@ export function verdict(result) {
   return `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split("\n").slice(-40).join("\n");
 }
 
+const git = (cwd, ...args) => spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+
+// Identifies what verify would see: HEAD on a clean tree, else a hash of HEAD, the diff against it and every
+// untracked file. null when it cannot tell (no repo, no commit, git failed): then verify always runs.
+// Ignored files are not part of it, as they were not for the clean-tree check.
+export function treeState(cwd) {
+  const head = git(cwd, "rev-parse", "HEAD");
+  const status = git(cwd, "status", "--porcelain");
+  if (head.status !== 0 || status.status !== 0) return null;
+  if (status.stdout.trim() === "") return head.stdout.trim();
+  const diff = git(cwd, "diff", "HEAD", "--binary");
+  const untracked = git(cwd, "ls-files", "-z", "--others", "--exclude-standard");
+  if (diff.status !== 0 || untracked.status !== 0) return null;
+  const hash = createHash("sha256").update(head.stdout).update(diff.stdout);
+  try {
+    for (const file of untracked.stdout.split("\0").filter(Boolean)) hash.update(`\0${file}\0`).update(readFileSync(join(cwd, file)));
+  } catch {
+    return null;
+  }
+  return `dirty:${hash.digest("hex")}`;
+}
+
 function main() {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
 
@@ -19,15 +42,12 @@ function main() {
   // Hooks only act on projects under the scope roots (~/DEV plus DEV_FACTORY_ROOTS).
   if (!inScope(cwd)) process.exit(0);
 
-  // Outside a git repo, always verify. A clean tree skips only when HEAD was already verified.
-  const git = (...args) => spawnSync("git", args, { cwd, encoding: "utf8" });
-  const clean = git("status", "--porcelain");
-  const isClean = clean.status === 0 && clean.stdout.trim() === "";
-  const head = isClean ? git("rev-parse", "HEAD").stdout.trim() : "";
-  const marker = isClean && head ? resolve(cwd, git("rev-parse", "--git-path", "dev-factory-verified").stdout.trim()) : "";
+  // Outside a git repo, always verify. Otherwise skip when this exact tree state was already verified.
+  const state = treeState(cwd);
+  const marker = state ? resolve(cwd, git(cwd, "rev-parse", "--git-path", "dev-factory-verified").stdout.trim()) : "";
   if (marker) {
     try {
-      if (readFileSync(marker, "utf8").trim() === head) process.exit(0);
+      if (readFileSync(marker, "utf8").trim() === state) process.exit(0);
     } catch {}
   }
 
@@ -55,7 +75,7 @@ function main() {
   if (failure === null) {
     if (marker) {
       try {
-        writeFileSync(marker, `${head}\n`);
+        writeFileSync(marker, `${state}\n`);
       } catch {}
     }
     process.exit(0);

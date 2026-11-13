@@ -2,7 +2,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,10 +89,68 @@ describe("verify gate flow", () => {
     assert.equal(t.run().status, 0);
     assert.equal(t.runs(), 2);
   });
-  it("a dirty tree verifies and does not record HEAD", () => {
+  it("a dirty tree verifies once, skips while unchanged, verifies again after any change", () => {
     const t = setup(true, { pass: true, git: true });
     writeFileSync(join(t.project, "dirty.txt"), "x");
     assert.equal(t.run().status, 0);
+    assert.equal(t.run().status, 0);
+    assert.equal(t.runs(), 1);
+    writeFileSync(join(t.project, "dirty.txt"), "y"); // untracked file content
+    t.run();
+    assert.equal(t.runs(), 2);
+    appendFileSync(join(t.project, "scripts", "control.mjs"), "// edit\n"); // tracked file
+    t.run();
+    assert.equal(t.runs(), 3);
+    writeFileSync(join(t.project, "new.txt"), ""); // new empty untracked file
+    t.run();
+    assert.equal(t.runs(), 4);
+    t.sh("add", "-A");
+    t.sh("commit", "-q", "-m", "all"); // same content, now clean on a new HEAD
+    t.run();
+    assert.equal(t.runs(), 5);
+    t.run();
+    assert.equal(t.runs(), 5);
+  });
+  it("every kind of change to a dirty tree verifies again", () => {
+    const t = setup(true, { pass: true, git: true });
+    const control = join(t.project, "scripts", "control.mjs");
+    writeFileSync(join(t.project, "tracked.txt"), "a");
+    t.sh("add", "-A");
+    t.sh("commit", "-q", "-m", "tracked");
+    writeFileSync(join(t.project, "loose.txt"), "x");
+    t.run();
+    const changes = {
+      "stage, then edit again": () => { appendFileSync(control, "// one\n"); t.sh("add", "-A"); appendFileSync(control, "// two\n"); },
+      "delete a tracked file": () => rmSync(join(t.project, "tracked.txt")),
+      "rename an untracked file": () => renameSync(join(t.project, "loose.txt"), join(t.project, "moved.txt")),
+      "chmod +x a tracked file": () => chmodSync(control, 0o755),
+    };
+    let expected = 1;
+    for (const [name, change] of Object.entries(changes)) {
+      change();
+      t.run();
+      assert.equal(t.runs(), ++expected, name);
+      t.run();
+      assert.equal(t.runs(), expected, `${name}: unchanged afterwards`);
+    }
+  });
+  it("a failing dirty tree is never recorded", () => {
+    const t = setup(true, { git: true });
+    writeFileSync(join(t.project, "dirty.txt"), "x");
+    assert.equal(t.run().status, 2);
+    const again = t.run({ stop_hook_active: true });
+    assert.equal(again.status, 0);
+    assert.match(JSON.parse(again.stdout).systemMessage, /still failing/);
+    assert.equal(t.runs(), 2);
     assert.equal(existsSync(join(t.project, ".git", "dev-factory-verified")), false);
+  });
+  it("a repo with no commit verifies on every stop", () => {
+    const t = setup(true, { pass: true });
+    t.sh("init", "-q");
+    assert.equal(t.run().status, 0);
+    const r = t.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.stderr, "");
+    assert.equal(t.runs(), 2);
   });
 });

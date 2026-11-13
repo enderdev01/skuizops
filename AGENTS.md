@@ -6,7 +6,7 @@ Keep this file short. A rule belongs here only if no type, lint, test or archite
 
 - `node scripts/control.mjs doctor` — run first; every check must be `ok`.
 - `node scripts/control.mjs verify` — plugin tests, marketplace and plugin validation, syntax check. Must be green before you finish.
-- `node scripts/control.mjs bench` — runs each guard as its hook does, in a throwaway repo on `main`.
+- `node scripts/control.mjs bench` — runs each guard and the Stop gate as their hooks do, in a throwaway repo on `main`.
 - Feature map: `.claude/verification/features/README.md` — how to exercise each feature and its observed output.
 
 ## Branch policy (enforced by hooks, applies to every agent)

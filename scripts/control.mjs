@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // This repo's lever: check the environment and verify the plugin and marketplace.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commitViolation } from "../plugins/dev-factory/scripts/branch-guard.mjs";
+import { trustFile } from "../plugins/dev-factory/scripts/scope.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
@@ -17,7 +18,7 @@ const HELP = `Usage: node scripts/control.mjs <command> [--json]
 Commands:
   doctor    Check node, git hooks and the current branch
   verify    Run plugin tests, validate the marketplace and the plugin, syntax-check every .mjs
-  bench     Run each guard as its hook does, in a throwaway repo on "main": verdict, message, median latency
+  bench     Run each guard and the Stop gate as their hooks do, in a throwaway repo on "main": verdict, message, median latency
 
 Every command exits 0 on success and 1 on failure. Add --json for machine-readable output.`;
 
@@ -25,6 +26,18 @@ function run(cmd, cmdArgs) {
   const start = Date.now();
   const r = spawnSync(cmd, cmdArgs, { cwd: root, encoding: "utf8" });
   return { ok: r.status === 0, ms: Date.now() - start, output: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+}
+
+// Same result as run(), without blocking: verify runs its steps at once.
+function runAsync(cmd, cmdArgs) {
+  const start = Date.now();
+  return new Promise((done) => {
+    const child = spawn(cmd, cmdArgs, { cwd: root });
+    let output = "";
+    for (const stream of [child.stdout, child.stderr]) stream.on("data", (d) => (output += d));
+    child.on("error", (e) => done({ ok: false, ms: Date.now() - start, output: e.message }));
+    child.on("close", (status) => done({ ok: status === 0, ms: Date.now() - start, output: output.trim() }));
+  });
 }
 
 function report(ok, data, text) {
@@ -64,21 +77,23 @@ function doctor() {
   report(checks.every((c) => c.ok), { checks }, text);
 }
 
-function verify() {
+async function verify() {
   const files = [...mjsFiles("plugins"), ...mjsFiles("scripts"), ...mjsFiles("bin")];
-  const syntax = files.map((f) => run("node", ["--check", f]));
-  const steps = [
-    { step: "plugin tests", ...run("node", ["--test", "plugins/dev-factory/scripts/"]) },
-    { step: "bin tests", ...run("node", ["--test", "bin/"]) },
-    { step: "validate marketplace", ...run("claude", ["plugin", "validate", root]) },
-    { step: "validate plugin", ...run("claude", ["plugin", "validate", join(root, "plugins", "dev-factory")]) },
-    {
-      step: `syntax check (${files.length} files)`,
-      ok: syntax.every((s) => s.ok),
-      ms: syntax.reduce((t, s) => t + s.ms, 0),
-      output: syntax.map((s) => s.output).filter(Boolean).join("\n"),
-    },
-  ];
+  const start = Date.now();
+  const syntaxStep = Promise.all(files.map((f) => runAsync("node", ["--check", f]))).then((syntax) => ({
+    ok: syntax.every((s) => s.ok),
+    ms: Date.now() - start,
+    output: syntax.map((s) => s.output).filter(Boolean).join("\n"),
+  }));
+  const names = ["plugin tests", "bin tests", "validate marketplace", "validate plugin", `syntax check (${files.length} files)`];
+  const results = await Promise.all([
+    runAsync("node", ["--test", "plugins/dev-factory/scripts/"]),
+    runAsync("node", ["--test", "bin/"]),
+    runAsync("claude", ["plugin", "validate", root]),
+    runAsync("claude", ["plugin", "validate", join(root, "plugins", "dev-factory")]),
+    syntaxStep,
+  ]);
+  const steps = results.map((r, i) => ({ step: names[i], ...r }));
   const text = steps
     .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} (${s.ms}ms)${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
     .join("\n");
@@ -106,6 +121,35 @@ const BENCH_CASES = [
   ["attribution-guard.mjs", "", "feat: add login\n", false],
 ];
 
+// The Stop gate on a dirty tree of a trusted throwaway project whose verify only counts its runs:
+// what a stop costs when the tree changed (verify runs) and when it did not (verify is skipped).
+function benchGate(repo, env) {
+  const home = join(repo, "home");
+  const counter = join(home, "runs");
+  const gateEnv = { ...env, HOME: home };
+  mkdirSync(dirname(trustFile(gateEnv)), { recursive: true });
+  writeFileSync(trustFile(gateEnv), `${repo}\n`);
+  mkdirSync(join(repo, "scripts"));
+  writeFileSync(join(repo, "scripts", "control.mjs"), `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(counter)}, "x");\n`);
+  writeFileSync(join(repo, ".gitignore"), "home\n");
+  spawnSync("git", ["-c", "user.name=bench", "-c", "user.email=bench@example.com", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
+  const runs = () => (existsSync(counter) ? readFileSync(counter, "utf8").length : 0);
+  const median = (xs) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  return [["dirty tree, changed since the last pass", true], ["dirty tree, unchanged since the last pass", false]].map(([tried, change]) => {
+    const before = runs();
+    const times = [];
+    let r;
+    for (let i = 0; i < BENCH_RUNS; i++) {
+      if (change) writeFileSync(join(repo, "notes.txt"), `${i}`);
+      const start = process.hrtime.bigint();
+      r = spawnSync("node", [join(root, "plugins", "dev-factory", "scripts", "verify-gate.mjs")], { cwd: repo, env: gateEnv, encoding: "utf8", input: JSON.stringify({ cwd: repo }) });
+      times.push(Number(process.hrtime.bigint() - start) / 1e6);
+    }
+    const verified = runs() - before;
+    return { guard: "verify-gate", tried, blocked: r.status !== 0, verdict: verified ? "verify" : "skip ", ok: r.status === 0 && verified === (change ? BENCH_RUNS : 0), ms: Math.round(median(times)), message: r.stderr.trim() };
+  });
+}
+
 function bench() {
   const repo = mkdtempSync(join(tmpdir(), "dev-factory-bench-"));
   // The Claude hooks only act under the scope roots: add the throwaway repo to them.
@@ -130,18 +174,19 @@ function bench() {
       const tried = isMsg ? `commit message ending in ${JSON.stringify(input.trim().split("\n").pop())}` : (input.tool_input.command ?? `Edit ${input.tool_input.file_path}`);
       return { guard: guard.replace(".mjs", ""), tried, blocked, ok: blocked === expectBlock, ms: Math.round(median(times)), message: r.stderr.trim() };
     });
+    rows.push(...benchGate(repo, env));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
   const text = rows
-    .map((r) => `${r.ok ? "ok  " : "FAIL"} ${r.blocked ? "BLOCK" : "allow"} ${String(r.ms).padStart(3)}ms  ${r.guard.padEnd(17)} ${r.tried}${r.message ? `\n       -> ${r.message}` : ""}`)
+    .map((r) => `${r.ok ? "ok  " : "FAIL"} ${r.verdict ?? (r.blocked ? "BLOCK" : "allow")} ${String(r.ms).padStart(3)}ms  ${r.guard.padEnd(17)} ${r.tried}${r.message ? `\n       -> ${r.message}` : ""}`)
     .join("\n");
   report(rows.every((r) => r.ok), { runs: BENCH_RUNS, node: process.versions.node, rows }, `${text}\n\nmedian of ${BENCH_RUNS} runs per case, node ${process.versions.node}`);
 }
 
 const [command] = args;
 if (command === "doctor") doctor();
-else if (command === "verify") verify();
+else if (command === "verify") await verify();
 else if (command === "bench") bench();
 else {
   process.stdout.write(`${HELP}\n`);

@@ -129,7 +129,8 @@ const gone = (pid) => {
   try { process.kill(pid, 0); return false; } catch { return true; }
 };
 
-describe("screenshot", () => {
+// Every test here uses its own temp project and port, so they run at once.
+describe("screenshot", { concurrency: true }, () => {
   it("fails and points at APP when it is not set", () => {
     const r = screenshot(null);
     assert.equal(r.status, 1);
