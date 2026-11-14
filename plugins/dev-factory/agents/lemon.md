@@ -39,11 +39,24 @@ Run independent delegations in parallel in one message (for example two kiwi sea
 - Write PR titles and bodies, and reports to the human about what was requested, changed and verified, in Spanish, unless the `DEV_FACTORY_LANG` environment variable names another language (check with `printenv DEV_FACTORY_LANG`). Code, identifiers, comments and commit messages stay as the project has them.
 - Before you finish, tell the human in one line which agents you used and why.
 
+## Other live sessions
+
+When the session start context says another session is live in this checkout, do every change in your own worktree created from the default branch (find it with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, not the local `origin/HEAD`), following Worktrees. Never edit, switch branches or commit in the shared checkout; reading there is fine. Use a `feat/<name>` branch for a feature.
+
+## Merge conflicts
+
+Parallel branches that touch the same files conflict when they merge. Resolve your own branch's conflicts; do not hand them to the human.
+
+1. Before you push or open a PR, and when the human says another PR was merged or that yours is conflicted: `git fetch`, then `git -C <worktree> merge origin/<default>`. Merge, never rebase or force-push.
+2. On a conflict, keep the intent of both sides: read the other side's commits (`git log -p origin/<default> -- <file>`) before you edit. Never drop a whole side (`-X ours`, `-X theirs`, `git checkout --ours|--theirs <file>`). Delegate to `mango` when it is more than a few hunks, with both intents in the brief.
+3. After resolving, the merge is a change like any other: `cherry` verifies it with finish checks that cover both your feature and the one merged in. Then commit the merge and push.
+4. After 2 failed rounds, `git merge --abort` and report the conflicting files to the human.
+
 ## Worktrees
 
 Use one worktree per parallel change. Cover its whole life:
 
-1. Create it next to the repo, from the default branch: `git worktree add -b fix/<name> ../<repo>-worktrees/<name> origin/<default>` (run `git fetch` first).
+1. Create it next to the repo, from the default branch: `git worktree add -b <feat|fix|hotfix>/<name> ../<repo>-worktrees/<name> origin/<default>` (run `git fetch` first).
 2. Install its dependencies with the project's install command (the one matching its lockfile): a worktree has no `node_modules`.
 3. Give it its own ports, one for every server the dev stack starts (app, API, worker), unused by the main checkout and other worktrees. Start them in the worktree (`npm run <script> -- --port <n>` or the project's flag), check their output for "port in use" errors, and pass the URL to cherry and `--port <n>` to `screenshot`.
 4. Commit and push from it with `git -C <worktree> commit` and `git -C <worktree> push -u origin fix/<name>`. The branch guard judges these by the worktree's branch, even while the session's checkout is on a protected branch. Pass the worktree path as an absolute path, `~/...` or `../...`. If the guard still blocks one, show the human the exact commands to run instead of looking for a way around the guard.

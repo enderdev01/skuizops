@@ -16,6 +16,8 @@ A Claude Code plugin that makes agents check their own work. It follows the pyra
 Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
 Hooks: branch guard on Bash, a protected-files guard on Edit, Write and Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
+Parallel sessions: a SessionStart hook (`scripts/sessions.mjs`) registers each session in `<git common dir>/dev-factory-sessions`. When another live session started earlier in the same checkout, the new one is told to do all its changes in its own git worktree from the default branch. Nothing is blocked. A session is dead after 12 hours without a tool call, and more than 4 live sessions on a repository add a warning.
+
 The Stop gate runs verify once per tree state: it records what it verified in the git directory (the commit on a clean tree, else a hash of the commit, the diff against it and the untracked files) and skips while nothing changed. Ignored files do not count as a change. If verify still fails on the second stop of a turn, you get a warning instead of a second block. A verify that runs longer than four minutes counts as a failure.
 
 The commit-msg guard rejects any `<something>-by:` trailer that names an AI tool, lines like "generated with" or "written by" an AI tool, and commits whose author or committer email belongs to one. It checks the email, not the name, so a person called Claude can commit. Lines that start with `#` are checked too, and everything after git's scissors line (the diff of `git commit -v`) is ignored.
