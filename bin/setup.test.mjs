@@ -137,6 +137,11 @@ describe("setLemonAgent", () => {
     assert.deepEqual(r, { status: "skip", message: "kept your agent mine" });
     assert.equal(read(root), '{"agent":"mine"}');
   });
+  it("migrates the agent of the old plugin name and keeps the other keys", () => {
+    const root = withSettings('{"model":"opus","agent":"dev-factory:lemon"}');
+    assert.deepEqual(setLemonAgent(root), { status: "ok", message: "migrated from dev-factory:lemon" });
+    assert.deepEqual(JSON.parse(read(root)), { model: "opus", agent: "skuizops:lemon" });
+  });
   it("never overwrites invalid JSON or a non-object", () => {
     for (const text of ["{nope", "[1]", "null", '"x"']) {
       const root = withSettings(text);
