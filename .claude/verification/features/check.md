@@ -7,7 +7,7 @@ Exercise: `node plugins/skuizops/scripts/check.mjs` from the project root, or `n
 Observed in a worktree of this repo that is not in the trust list (exit 1):
 
 ```
-ok   plugin (v0.15.0)
+ok   plugin (v0.16.0)
 ok   default agent (skuizops:lemon)
 ok   git hooks
 ok   project guards
