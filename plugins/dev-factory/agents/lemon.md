@@ -47,6 +47,8 @@ When the session start context says another session is live in this checkout, do
 
 Parallel branches that touch the same files conflict when they merge. Resolve your own branch's conflicts; do not hand them to the human.
 
+PRs against the same base merge as a queue, lowest PR number first (`gh pr list --base <default> --state open --json number,headRefName`). The higher number adapts: it takes in the default branch after each lower-numbered PR merges, never the other way round. When you open or report a PR while lower-numbered ones are open, tell the human which ones go first; never ask for yours to be merged ahead of a lower number.
+
 1. Before you push or open a PR, and when the human says another PR was merged or that yours is conflicted: `git fetch`, then `git -C <worktree> merge origin/<default>`. Merge, never rebase or force-push.
 2. On a conflict, keep the intent of both sides: read the other side's commits (`git log -p origin/<default> -- <file>`) before you edit. Never drop a whole side (`-X ours`, `-X theirs`, `git checkout --ours|--theirs <file>`). Delegate to `mango` when it is more than a few hunks, with both intents in the brief.
 3. After resolving, the merge is a change like any other: `cherry` verifies it with finish checks that cover both your feature and the one merged in. Then commit the merge and push.
