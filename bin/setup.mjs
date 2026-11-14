@@ -2,9 +2,10 @@
 // One-command setup for a human: npx github:enderdev01/skuizops
 // Installs or updates the marketplace and plugin, turns on its auto-update, sets the git hooks and the trust entry, then relaunches Claude Code.
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { check, format } from "../plugins/skuizops/scripts/check.mjs";
 import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
@@ -77,6 +78,114 @@ export function setAutoUpdate(home) {
   return { status: "ok", message: "on" };
 }
 
+const OUTPUT_STYLE = "brief";
+const readJson = (file) => {
+  try {
+    const value = JSON.parse(readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
+// Copies the brief output style into <root>/.claude/output-styles and sets "outputStyle" in <root>/.claude/settings.json.
+// Changes nothing when the user, project or local settings already choose a style.
+export function setOutputStyle(root, home = homedir(), source = new URL("../plugins/skuizops/output-styles/brief.md", import.meta.url)) {
+  const file = join(root, ".claude", "settings.json");
+  let settings = {};
+  if (existsSync(file)) {
+    settings = readJson(file);
+    if (!settings) return { status: "fail", message: "fix .claude/settings.json (invalid JSON) and re-run" };
+  }
+  const chosen = [join(home, ".claude", "settings.json"), file, join(root, ".claude", "settings.local.json")]
+    .map((f) => (existsSync(f) ? readJson(f)?.outputStyle : undefined))
+    .find((v) => v !== undefined);
+  if (chosen !== undefined) return { status: "skip", message: `kept your output style ${chosen}` };
+  mkdirSync(join(root, ".claude", "output-styles"), { recursive: true });
+  writeFileSync(join(root, ".claude", "output-styles", `${OUTPUT_STYLE}.md`), readFileSync(source));
+  writeFileSync(file, `${JSON.stringify({ ...settings, outputStyle: OUTPUT_STYLE }, null, 2)}\n`);
+  return { status: "ok", message: "set" };
+}
+
+// --- recommended third-party skills ---
+// shortcut: installs the latest version, pin a ref when a release process exists
+const SKILLS = [
+  { name: "ponytail", license: "MIT", webOnly: false, plugin: "ponytail@ponytail", commands: [["claude", "plugin", "marketplace", "add", "DietrichGebert/ponytail"], ["claude", "plugin", "install", "ponytail@ponytail"]] },
+  { name: "engram", license: "MIT", webOnly: false, plugin: "engram@engram", commands: [["brew", "install", "gentleman-programming/tap/engram"], ["engram", "setup", "claude-code"]] },
+  { name: "unslop", license: "CC-BY-4.0", webOnly: true, dir: "unslop", commands: [["git", "clone", "--depth", "1", "https://github.com/heydamir/unslop"], ["copy", "skills/unslop", "~/.claude/skills/unslop"]] },
+  { name: "stageshow", license: "MIT", webOnly: true, dir: "stageshow", commands: [["npx", "skills", "add", "benjitaylor/skills", "--skill", "stageshow", "-g", "-a", "claude-code", "-y"]] },
+];
+const ENGRAM_DOCS = "https://github.com/Gentleman-Programming/engram/blob/main/docs/INSTALLATION.md";
+
+export const recommendedSkills = (webUi) => SKILLS.filter((s) => webUi || !s.webOnly);
+export const isInstalled = (skill, { plugins = [], home, project }) =>
+  skill.plugin ? plugins.some((p) => p.id === skill.plugin) : [home, project].some((base) => existsSync(join(base, ".claude", "skills", skill.dir)));
+export const onPath = (cmd, path = process.env.PATH ?? "") => path.split(delimiter).some((d) => d && existsSync(join(d, cmd)));
+
+// exec(cmd, args) -> Promise, throws on failure. Never throws itself: returns one { name, status: "ok" | "skip" | "fail", text } per offered skill.
+export async function installRecommended({ webUi, home, project, exec, hasBrew = onPath("brew") }) {
+  let plugins = [];
+  try {
+    plugins = JSON.parse((await exec("claude", ["plugin", "list", "--json"])).stdout);
+  } catch {}
+  const results = [];
+  for (const skill of recommendedSkills(webUi)) {
+    const done = (status, text) => results.push({ name: skill.name, status, text });
+    if (isInstalled(skill, { plugins, home, project })) {
+      done("skip", "already installed");
+      continue;
+    }
+    if (skill.name === "engram" && !hasBrew) {
+      done("skip", `brew not found, not installed. Run: brew install gentleman-programming/tap/engram && engram setup claude-code (other methods: ${ENGRAM_DOCS})`);
+      continue;
+    }
+    try {
+      if (skill.name === "unslop") await installUnslop(home, exec);
+      else for (const [cmd, ...args] of skill.commands) await exec(cmd, args);
+      done("ok", "installed");
+    } catch (error) {
+      done("fail", firstErrorLine(error.stderr || error.message));
+    }
+  }
+  return results;
+}
+
+// Lists what it would install with each command, asks ONE yes/no and installs only after an explicit yes. Never returns "fail":
+// recommended skills are not a requirement, so a failed install is reported in the details but does not fail the installer.
+export async function offerRecommended({ webUi, isTTY, ask, say, ...rest }) {
+  if (!isTTY) return { status: "skip", text: "not an interactive terminal", installed: [] };
+  say("  Recommended skills (third party, installed for your user in ~/.claude, latest version of each):");
+  for (const s of recommendedSkills(webUi)) for (const c of s.commands) say(`    ${s.name} (${s.license}): ${c.join(" ")}`);
+  say(`  ${USAGE_NOTE}`);
+  if (!/^(y|yes|s|si|sí)$/i.test((await ask("  Install them? [y/N] ")).trim())) return { status: "skip", text: "not installed", installed: [] };
+  const results = await installRecommended({ webUi, ...rest });
+  const installed = results.filter((r) => r.status === "ok").map((r) => r.name);
+  return { status: installed.length ? "ok" : "skip", text: "", installed, details: results.map((r) => `${MARK[r.status]} ${r.name}: ${r.text}`) };
+}
+
+// Clones into a temp dir and copies only skills/unslop plus the repo's LICENSE (CC-BY-4.0 asks to keep the credit); nothing is bundled in skuizops.
+async function installUnslop(home, exec) {
+  const tmp = mkdtempSync(join(tmpdir(), "skuizops-unslop-"));
+  try {
+    const repo = join(tmp, "repo");
+    await exec("git", ["clone", "--depth", "1", "https://github.com/heydamir/unslop", repo]);
+    const src = join(repo, "skills", "unslop");
+    const license = join(repo, "LICENSE");
+    // The clone is third-party content: a symlink in it would make the copy write outside dest. Checked before any copy.
+    const plain = lstatSync(join(repo, "skills")).isDirectory() && lstatSync(src).isDirectory() && lstatSync(license).isFile() && !readdirSync(src, { recursive: true, withFileTypes: true }).some((e) => e.isSymbolicLink());
+    if (!plain) throw new Error("unslop: the repo holds a symlink or lacks skills/unslop or LICENSE, nothing was copied");
+    const dest = join(home, ".claude", "skills", "unslop");
+    // existsSync is false for a dangling symlink, and cpSync onto one aborts the whole Node process.
+    if (lstatSync(dest, { throwIfNoEntry: false })) throw new Error(`unslop: ${dest} already exists as a broken link, remove it and re-run`);
+    mkdirSync(join(home, ".claude", "skills"), { recursive: true });
+    cpSync(src, dest, { recursive: true });
+    cpSync(license, join(dest, "LICENSE"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+const USAGE_NOTE = "Installing or first using these skills can consume your plan usage; how much depends on the project size and your plan.";
 const readPackage = (root) => {
   try {
     return JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -105,7 +214,7 @@ export function welcomePrompt({ oldVersion, newVersion, backups = [], configured
   const what = !oldVersion ? `installed v${newVersion}` : oldVersion !== newVersion ? `updated from v${oldVersion} to v${newVersion}` : `confirmed up to date at v${newVersion}`;
   const saved = backups.length ? ` These files had local edits and were backed up before being replaced: ${backups.join(", ")}. Tell the user where the backups are.` : "";
   const conf = configured.length ? ` The setup also did this: ${configured.join("; ")}. Mention it in one line. Settings changed, so the lemon orchestrator applies to NEW sessions, not this one: tell the user to open a new session to get it.` : "";
-  return `skuizops was just ${what} in this project by the setup command.${saved}${conf} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill. Do not run any command.`;
+  return `skuizops was just ${what} in this project by the setup command.${saved}${conf} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill, and say that running it uses the user's plan usage, that how much depends on the project size and the plan (give no figures), and that you will run it only after an explicit yes from the user. Do not run any command.`;
 }
 
 export function hasSession(cwd, home = homedir()) {
@@ -234,7 +343,14 @@ async function main() {
     return { status: r.status, text: r.message };
   }));
 
-  track(await step("Playwright", async ({ pause }) => {
+  track(await step("Output style", async () => {
+    const r = setOutputStyle(project);
+    if (r.status === "fail") throw new Error(r.message);
+    env.configured.push(r.status === "ok" ? `turned on the brief output style (remove "outputStyle" from .claude/settings.json to turn it off)` : `output style: ${r.message}`);
+    return { status: r.status, text: r.message };
+  }));
+
+  track(await step("Playwright",async ({ pause }) => {
     const pkg = readPackage(project);
     if (!hasWebUi(pkg)) return { status: "skip", text: "no web UI detected" };
     const had = hasPlaywright(pkg);
@@ -251,6 +367,21 @@ async function main() {
     }
     env.configured.push(had ? "Playwright was already installed" : "installed Playwright and Chromium");
     return had ? { status: "skip", text: "already installed" } : { status: "ok", text: "installed" };
+  }));
+
+  track(await step("Recommended skills", async ({ pause }) => {
+    const ask = async (question) => {
+      pause();
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+      }
+    };
+    const r = await offerRecommended({ webUi: hasWebUi(readPackage(project)), home: homedir(), project, isTTY: process.stdin.isTTY, ask, say: (s) => out(dim(s)), exec: (cmd, args) => run(cmd, args, { cwd: project, maxBuffer: 1 << 24 }) });
+    if (r.installed.length) env.configured.push(`installed the recommended skills ${r.installed.join(", ")}; they apply to NEW sessions`);
+    return r;
   }));
 
   // Reported but not tracked: a failed check tells the human what to fix, it is not an installer error.
@@ -270,6 +401,7 @@ async function main() {
     out("Exit Claude and run `claude --continue` to load the update.");
     return;
   }
+  out(yellow("Heads up: the Claude session that opens next uses your plan usage. How much depends on the project size and your plan."));
   const prompt = welcomePrompt(env);
   const args = [...(hasSession(cwd) ? ["--continue"] : []), prompt];
   if (!process.stdin.isTTY) {
