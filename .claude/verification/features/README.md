@@ -15,6 +15,7 @@ The user-facing features of the `skuizops` plugin and how to exercise each one. 
 | Lint on edit | PostToolUse hook: runs the project's local ESLint on the edited JS/TS file | `node scripts/control.mjs verify` | [check-file.md](check-file.md) |
 | Subagent status row | Status line: one row per subagent with fruit emoji, task, model and tokens | `node scripts/control.mjs verify` | [subagent-row.md](subagent-row.md) |
 | Trust command | `/skuizops:trust [dir]`: the human adds a project to the trust list | `node scripts/control.mjs verify` | [trust.md](trust.md) |
+| Check command | `/skuizops:check`: read-only check of plugin, default agent, git hooks, guards, trust and old-name leftovers, with the fix for each FAIL; a SessionStart hook nudges when one fails | `node --test plugins/skuizops/scripts/check.test.mjs` | [check.md](check.md) |
 | Install-hooks command | `/skuizops:install-hooks [dir]`: the human installs the git hooks and guard scripts in a project | `node scripts/control.mjs verify` | [install-hooks.md](install-hooks.md) |
 | Setup command | `npx github:enderdev01/skuizops`: the human installs or updates marketplace, plugin, git hooks (keeping backups of edits), trusts the project, sets lemon in `.claude/settings.json` (never overwrites a different agent or invalid JSON) and installs Playwright when a web UI is detected, then relaunches Claude | `node --test bin/setup.test.mjs` | [install-hooks.md](install-hooks.md) |
 

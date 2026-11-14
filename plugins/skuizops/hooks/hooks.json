@@ -20,6 +20,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/leftovers.mjs\"",
             "timeout": 10,
             "statusMessage": "Checking for leftovers"
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs\" notice",
+            "timeout": 10,
+            "statusMessage": "Checking the project configuration"
           }
         ]
       }
