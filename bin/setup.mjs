@@ -23,6 +23,8 @@ export const pickPluginAction = (list) => (list.some((p) => p.id === PLUGIN) ? "
 export const pluginVersion = (list) => list.find((p) => p.id === PLUGIN)?.version ?? null;
 
 const LEMON = "skuizops:lemon";
+// The plugin's name before the rename: that agent no longer exists, so it is ours to replace, not the user's choice.
+const OLD_LEMON = "dev-factory:lemon";
 const WEB_DEPS = ["vite", "next", "react", "react-dom", "vue", "svelte", "@sveltejs/kit", "nuxt", "astro", "@angular/core", "solid-js", "preact", "@remix-run/react"];
 
 // Sets "agent": "skuizops:lemon" in <root>/.claude/settings.json without ever overwriting what the user has.
@@ -37,11 +39,11 @@ export function setLemonAgent(root) {
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) return { status: "fail", message: "fix .claude/settings.json (invalid JSON) and re-run" };
     if (settings.agent === LEMON) return { status: "skip", message: "already set" };
-    if (settings.agent !== undefined) return { status: "skip", message: `kept your agent ${settings.agent}` };
+    if (settings.agent !== undefined && settings.agent !== OLD_LEMON) return { status: "skip", message: `kept your agent ${settings.agent}` };
   }
   mkdirSync(join(root, ".claude"), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ ...settings, agent: LEMON }, null, 2)}\n`);
-  return { status: "ok", message: "set" };
+  return { status: "ok", message: settings.agent === OLD_LEMON ? `migrated from ${OLD_LEMON}` : "set" };
 }
 
 // Turns on Claude Code's auto-update for this marketplace in the user's settings (what /plugin > Marketplaces
