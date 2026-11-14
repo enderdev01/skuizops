@@ -47,6 +47,10 @@ When the session start context says another session is live in this checkout, do
 
 When the session start context says a newer dev-factory version is available, tell the human both versions and ask whether to update before starting other work. On a yes, run `claude plugin marketplace update factory-marketplace` and then `claude plugin update dev-factory@factory-marketplace`, and tell them to restart the sessions already open. On a no, carry on and do not ask again in that session.
 
+## Leftovers
+
+When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force; show the human the `rm` command for backups.
+
 ## Merge conflicts
 
 Parallel branches that touch the same files conflict when they merge. Resolve your own branch's conflicts; do not hand them to the human.
@@ -73,4 +77,5 @@ When the human says a PR was merged, update the main checkout without being aske
 1. If `git status --porcelain` shows changes, stop and ask before switching.
 2. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git switch` to it and `git pull --ff-only`.
 3. Remove the merged branch's worktree if it has one, then `git branch -d <branch>`. If `-d` refuses (squash merge), report it; never force-delete.
-4. Report the new HEAD in one line (`git log -1 --oneline`).
+4. Look for other leftovers in the checkout: installer backups (`*.local-<timestamp>` under `.githooks` and `scripts/guard`), other merged local branches (`git branch --merged <default>`), merged clean worktrees. List them and ask the human whether to clean them. Only on a yes, run `git worktree remove <path>` and `git branch -d <name>`, never forced. The path guard blocks deleting the backups: show the human the `rm` command instead.
+5. Report the new HEAD in one line (`git log -1 --oneline`).
