@@ -57,6 +57,9 @@ Eso es todo. El comando:
 - activa el auto-update: las versiones nuevas se instalan solas al abrir Claude Code (si lo tienes en `false`, lo respeta);
 - instala los hooks de git (si editaste alguno, guarda una copia `.local-<fecha>` antes de reemplazarlo);
 - marca el proyecto como confiable y deja a `lemon` como agente por defecto (sin pisar tu configuración);
+- activa el estilo de salida `brief` (respuestas breves; se desactiva quitando la clave `outputStyle` de `.claude/settings.json`; si ya tienes uno, lo respeta);
+- ofrece, con un solo sí/no, instalar skills recomendadas de terceros (ponytail, engram y, con UI web, unslop y stageshow; detalle y licencias en el README del plugin). Sin un sí explícito no instala nada;
+- avisa de que la sesión de Claude que abre usa el consumo de tu plan;
 - reabre Claude Code con un saludo.
 
 Para actualizar, ejecuta el mismo comando otra vez.

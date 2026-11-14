@@ -101,7 +101,28 @@ Inside your project, run one command:
 npx github:enderdev01/skuizops
 ```
 
-It installs or updates the marketplace and the plugin, installs the git hooks (an edited hook is saved as `<file>.local-<date>` before it is replaced), trusts the project, sets lemon as the project's agent in `.claude/settings.json` (never overwriting an agent you chose or invalid JSON), installs Playwright and Chromium when it detects a web UI (using the package manager of your lockfile), and relaunches Claude Code with a welcome that says what it configured. `create-verification-skill` asks you to run it when any of that is missing. Only the human runs it; the path guard blocks agents.
+It installs or updates the marketplace and the plugin, installs the git hooks (an edited hook is saved as `<file>.local-<date>` before it is replaced), trusts the project, sets lemon as the project's agent in `.claude/settings.json` (never overwriting an agent you chose or invalid JSON), installs Playwright and Chromium when it detects a web UI (using the package manager of your lockfile), and turns on the `brief` output style, optionally installs recommended skills (below), warns that the Claude session it opens uses your plan usage, and relaunches Claude Code with a welcome that says what it configured. `create-verification-skill` asks you to run it when any of that is missing. Only the human runs it; the path guard blocks agents.
+
+### Recommended skills
+
+After the other steps, in an interactive terminal only, the setup lists the third-party skills it would install with the exact command of each and asks one yes/no for the whole package. Without an explicit yes it installs nothing. Installing or first using them can consume your plan usage; how much depends on the project size and your plan. They install for your user (`~/.claude`), never the project, at the latest version of each. One already installed is reported and not reinstalled; one that fails is reported by name and the rest continue. They are never required, so a failure does not make the setup end with an error.
+
+| Skill | Origin | License | Offered | Install |
+|---|---|---|---|---|
+| ponytail | `DietrichGebert/ponytail` | MIT | always | `claude plugin marketplace add DietrichGebert/ponytail`, `claude plugin install ponytail@ponytail` |
+| engram | `Gentleman-Programming/engram` | MIT | always | only with `brew` on the PATH: `brew install gentleman-programming/tap/engram`, then `engram setup claude-code`. Without `brew` it prints the command and the [install docs](https://github.com/Gentleman-Programming/engram/blob/main/docs/INSTALLATION.md) and installs nothing |
+| unslop | `heydamir/unslop` | CC-BY-4.0 | web UI projects | clones the repo to a temp dir and copies `skills/unslop` plus its `LICENSE` to `~/.claude/skills/unslop`; credit: Damir Sokolovsky (`@heydamir`), https://github.com/heydamir/unslop. skuizops bundles none of it |
+| stageshow | `benjitaylor/skills` | MIT | web UI projects | `npx skills add benjitaylor/skills --skill stageshow -g -a claude-code -y` |
+
+A skill counts as installed when its plugin id (`ponytail@ponytail`, `engram@engram`) is in `claude plugin list --json`, or when `~/.claude/skills/<name>` or `.claude/skills/<name>` exists.
+
+### Brief output style
+
+The setup copies `output-styles/brief.md` to `.claude/output-styles/` and sets `"outputStyle": "brief"` in the project's `.claude/settings.json`: answers without filler, pleasantries or hedging, in full sentences, in your language; code, commits and PRs are written normally, and security warnings and irreversible-action confirmations keep their detail. If `outputStyle` is already set in `~/.claude/settings.json`, `.claude/settings.json` or `.claude/settings.local.json`, nothing changes and the setup reports `kept your output style <value>`. To turn it off, remove the `outputStyle` key.
+
+### Plan usage
+
+Before opening Claude with the welcome message, the setup warns that the session uses your plan usage. The welcome suggests `create-verification-skill` with the same warning (the amount depends on the project size and your plan) and the skill runs only after your explicit yes.
 
 Manual:
 

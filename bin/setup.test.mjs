@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeProjectDir, firstErrorLine, hasPlaywright, hasSession, hasWebUi, pickMarketplaceAction, pickPluginAction, playwrightInstallCommand, setAutoUpdate, setLemonAgent, welcomePrompt } from "./setup.mjs";
+import { encodeProjectDir, firstErrorLine, hasPlaywright, hasSession, hasWebUi, installRecommended, offerRecommended, pickMarketplaceAction, pickPluginAction, playwrightInstallCommand, recommendedSkills, setAutoUpdate, setLemonAgent, setOutputStyle, welcomePrompt } from "./setup.mjs";
 
 describe("encodeProjectDir", () => {
   it("replaces every non-alphanumeric character with a dash", () => {
@@ -176,5 +176,156 @@ describe("Playwright detection", () => {
   it("shows the first useful error line", () => {
     assert.equal(firstErrorLine("\nnpm warn x\nnpm error code E404\nmore"), "npm error code E404");
     assert.equal(firstErrorLine("boom\nbang"), "boom");
+  });
+});
+
+describe("welcomePrompt usage warning", () => {
+  it("warns about plan usage and requires an explicit yes before create-verification-skill", () => {
+    const p = welcomePrompt({ oldVersion: null, newVersion: "1" });
+    assert.match(p, /create-verification-skill skill, and say that running it uses the user's plan usage/);
+    assert.match(p, /depends on the project size and the plan/);
+    assert.match(p, /only after an explicit yes/);
+  });
+});
+
+describe("recommended skills", () => {
+  const names = (webUi) => recommendedSkills(webUi).map((s) => s.name);
+  const fake = (plugins = [], { failOn, tamper } = {}) => {
+    const calls = [];
+    const exec = async (cmd, args) => {
+      if (args[0] === "plugin" && args[1] === "list") return { stdout: JSON.stringify(plugins) };
+      calls.push([cmd, ...args].join(" "));
+      if (failOn && [cmd, ...args].join(" ").includes(failOn)) throw Object.assign(new Error("x"), { stderr: "npm error boom\nmore" });
+      if (cmd === "git") {
+        const repo = args.at(-1);
+        mkdirSync(join(repo, "skills", "unslop"), { recursive: true });
+        writeFileSync(join(repo, "skills", "unslop", "SKILL.md"), "s");
+        writeFileSync(join(repo, "LICENSE"), "CC BY 4.0");
+        tamper?.(repo);
+      }
+      return { stdout: "" };
+    };
+    return { exec, calls };
+  };
+  const dirs = () => ({ home: mkdtempSync(join(tmpdir(), "rec-home-")), project: mkdtempSync(join(tmpdir(), "rec-proj-")) });
+  const all = [{ id: "ponytail@ponytail" }, { id: "engram@engram" }];
+
+  it("offers ponytail and engram, plus unslop and stageshow with a web UI", () => {
+    assert.deepEqual(names(false), ["ponytail", "engram"]);
+    assert.deepEqual(names(true), ["ponytail", "engram", "unslop", "stageshow"]);
+  });
+  it("installs nothing without TTY or without an explicit yes", async () => {
+    for (const [isTTY, answer] of [[false, "y"], [true, ""], [true, "no"], [true, "maybe"]]) {
+      const { exec, calls } = fake();
+      const r = await offerRecommended({ webUi: true, isTTY, ask: async () => answer, say() {}, exec, ...dirs(), hasBrew: true });
+      assert.equal(r.status, "skip");
+      assert.deepEqual(calls, []);
+    }
+  });
+  it("installs all four after a yes, with the user-scope commands", async () => {
+    const { exec, calls } = fake();
+    const d = dirs();
+    const said = [];
+    const r = await offerRecommended({ webUi: true, isTTY: true, ask: async () => "y", say: (s) => said.push(s), exec, ...d, hasBrew: true });
+    assert.deepEqual(r.installed, ["ponytail", "engram", "unslop", "stageshow"]);
+    assert.ok(calls.includes("claude plugin install ponytail@ponytail"));
+    assert.ok(calls.includes("brew install gentleman-programming/tap/engram") && calls.includes("engram setup claude-code"));
+    assert.ok(calls.includes("npx skills add benjitaylor/skills --skill stageshow -g -a claude-code -y"));
+    assert.equal(readFileSync(join(d.home, ".claude", "skills", "unslop", "SKILL.md"), "utf8"), "s");
+    assert.equal(readFileSync(join(d.home, ".claude", "skills", "unslop", "LICENSE"), "utf8"), "CC BY 4.0");
+    assert.ok(said.some((l) => l.includes("plan usage")));
+  });
+  it("copies nothing from an unslop repo that holds a symlink or lacks its LICENSE", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "rec-outside-"));
+    const tampers = {
+      "skill dir is a symlink": (repo) => (rmSync(join(repo, "skills", "unslop"), { recursive: true }), symlinkSync(outside, join(repo, "skills", "unslop"))),
+      "symlink inside the skill": (repo) => symlinkSync(outside, join(repo, "skills", "unslop", "link")),
+      "LICENSE is a symlink": (repo) => (rmSync(join(repo, "LICENSE")), symlinkSync(join(outside, "x"), join(repo, "LICENSE"))),
+      "no LICENSE": (repo) => rmSync(join(repo, "LICENSE")),
+      "skills is a symlink": (repo) => {
+        const real = mkdtempSync(join(tmpdir(), "rec-real-"));
+        mkdirSync(join(real, "unslop"));
+        rmSync(join(repo, "skills"), { recursive: true });
+        symlinkSync(real, join(repo, "skills"));
+      },
+    };
+    for (const [name, tamper] of Object.entries(tampers)) {
+      const d = dirs();
+      const r = await installRecommended({ webUi: true, exec: fake(all, { tamper }).exec, ...d, hasBrew: true });
+      assert.equal(r.find((x) => x.name === "unslop").status, "fail", name);
+      assert.equal(existsSync(join(d.home, ".claude", "skills", "unslop")), false, name);
+      assert.deepEqual(readdirSync(outside), [], name);
+    }
+  });
+  it("fails unslop, without crashing, when its destination is a broken link", async () => {
+    const d = dirs();
+    mkdirSync(join(d.home, ".claude", "skills"), { recursive: true });
+    symlinkSync(join(d.home, "gone"), join(d.home, ".claude", "skills", "unslop"));
+    const r = await installRecommended({ webUi: true, exec: fake(all).exec, ...d, hasBrew: true });
+    assert.deepEqual(r.map((x) => [x.name, x.status]).slice(2), [["unslop", "fail"], ["stageshow", "ok"]]);
+    assert.equal(existsSync(join(d.home, "gone")), false);
+  });
+  it("detects each one as installed from its marker and runs no install on a second pass", async () => {
+    const d = dirs();
+    for (const base of [d.home, d.project]) mkdirSync(join(base, ".claude", "skills", base === d.home ? "unslop" : "stageshow"), { recursive: true });
+    const { exec, calls } = fake(all);
+    const r = await installRecommended({ webUi: true, exec, ...d, hasBrew: true });
+    assert.deepEqual(r.map((x) => x.text), Array(4).fill("already installed"));
+    assert.deepEqual(calls, []);
+  });
+  it("reports a failing install by name and keeps going", async () => {
+    const { exec, calls } = fake([], { failOn: "ponytail@ponytail" });
+    const r = await installRecommended({ webUi: false, exec, ...dirs(), hasBrew: true });
+    assert.deepEqual(r.map((x) => [x.name, x.status]), [["ponytail", "fail"], ["engram", "ok"]]);
+    assert.equal(r[0].text, "npm error boom");
+    assert.ok(calls.includes("engram setup claude-code"));
+  });
+  it("does not install engram without brew and shows the command", async () => {
+    const { exec, calls } = fake();
+    const r = await installRecommended({ webUi: false, exec, ...dirs(), hasBrew: false });
+    assert.equal(r[1].status, "skip");
+    assert.match(r[1].text, /brew install gentleman-programming\/tap\/engram.*docs\/INSTALLATION\.md/);
+    assert.ok(!calls.some((c) => c.includes("engram") && !c.includes("ponytail")));
+  });
+});
+
+describe("setOutputStyle", () => {
+  const source = join(mkdtempSync(join(tmpdir(), "style-src-")), "brief.md");
+  writeFileSync(source, "---\nname: brief\n---\n");
+  const setup = ({ project, home, local } = {}) => {
+    const root = mkdtempSync(join(tmpdir(), "style-proj-"));
+    const h = mkdtempSync(join(tmpdir(), "style-home-"));
+    const put = (dir, name, text) => text !== undefined && (mkdirSync(join(dir, ".claude"), { recursive: true }), writeFileSync(join(dir, ".claude", name), text));
+    put(root, "settings.json", project);
+    put(root, "settings.local.json", local);
+    put(h, "settings.json", home);
+    return { root, h, file: join(root, ".claude", "settings.json") };
+  };
+
+  it("copies the style, sets the key and keeps the others", () => {
+    const { root, h, file } = setup({ project: '{"model":"opus"}' });
+    assert.deepEqual(setOutputStyle(root, h, source), { status: "ok", message: "set" });
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { model: "opus", outputStyle: "brief" });
+    assert.equal(readFileSync(join(root, ".claude", "output-styles", "brief.md"), "utf8"), "---\nname: brief\n---\n");
+  });
+  it("works on a clean project", () => {
+    const { root, h, file } = setup();
+    assert.equal(setOutputStyle(root, h, source).status, "ok");
+    assert.equal(readFileSync(file, "utf8"), '{\n  "outputStyle": "brief"\n}\n');
+  });
+  for (const where of ["home", "project", "local"]) {
+    it(`keeps a style already set in the ${where} settings`, () => {
+      const { root, h, file } = setup({ [where]: '{"outputStyle":"mine"}' });
+      assert.deepEqual(setOutputStyle(root, h, source), { status: "skip", message: "kept your output style mine" });
+      assert.equal(existsSync(join(root, ".claude", "output-styles")), false);
+      if (where === "project") assert.equal(readFileSync(file, "utf8"), '{"outputStyle":"mine"}');
+      else assert.equal(existsSync(file), false);
+    });
+  }
+  it("fails on invalid JSON without writing", () => {
+    const { root, h, file } = setup({ project: "{nope" });
+    assert.equal(setOutputStyle(root, h, source).status, "fail");
+    assert.equal(readFileSync(file, "utf8"), "{nope");
+    assert.equal(existsSync(join(root, ".claude", "output-styles")), false);
   });
 });
