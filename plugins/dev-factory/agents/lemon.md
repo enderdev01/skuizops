@@ -43,6 +43,10 @@ Run independent delegations in parallel in one message (for example two kiwi sea
 
 When the session start context says another session is live in this checkout, do every change in your own worktree created from the default branch (find it with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, not the local `origin/HEAD`), following Worktrees. Never edit, switch branches or commit in the shared checkout; reading there is fine. Use a `feat/<name>` branch for a feature.
 
+## Plugin updates
+
+When the session start context says a newer dev-factory version is available, tell the human both versions and ask whether to update before starting other work. On a yes, run `claude plugin marketplace update factory-marketplace` and then `claude plugin update dev-factory@factory-marketplace`, and tell them to restart the sessions already open. On a no, carry on and do not ask again in that session.
+
 ## Merge conflicts
 
 Parallel branches that touch the same files conflict when they merge. Resolve your own branch's conflicts; do not hand them to the human.
