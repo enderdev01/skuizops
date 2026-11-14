@@ -1,7 +1,7 @@
 {
-  "name": "dev-factory-setup",
+  "name": "skuizops-setup",
   "version": "0.12.3",
   "private": true,
   "type": "module",
-  "bin": { "dev-factory-setup": "bin/setup.mjs" }
+  "bin": { "skuizops-setup": "bin/setup.mjs" }
 }

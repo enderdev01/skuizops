@@ -1,11 +1,11 @@
 {
-  "name": "factory-marketplace",
-  "owner": { "name": "dev-factory" },
-  "metadata": { "description": "Local marketplace for the dev-factory agent plugin." },
+  "name": "juicebar",
+  "owner": { "name": "skuizops" },
+  "metadata": { "description": "Local marketplace for the skuizops agent plugin." },
   "plugins": [
     {
-      "name": "dev-factory",
-      "source": "./plugins/dev-factory",
+      "name": "skuizops",
+      "source": "./plugins/skuizops",
       "description": "Agent factory: scout, log reader, builder and inspector agents, a verification CLI, a branch policy and hooks that keep agents honest."
     }
   ]

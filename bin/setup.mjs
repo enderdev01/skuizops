@@ -1,19 +1,19 @@
 #!/usr/bin/env node
-// One-command setup for a human: npx github:enderdev01/la-fruteria
+// One-command setup for a human: npx github:enderdev01/skuizops
 // Installs or updates the marketplace and plugin, turns on its auto-update, sets the git hooks and the trust entry, then relaunches Claude Code.
 import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { installHooks } from "../plugins/dev-factory/scripts/install-hooks.mjs";
-import { isMain, isTrusted } from "../plugins/dev-factory/scripts/scope.mjs";
-import { trust } from "../plugins/dev-factory/scripts/trust.mjs";
+import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
+import { isMain, isTrusted } from "../plugins/skuizops/scripts/scope.mjs";
+import { trust } from "../plugins/skuizops/scripts/trust.mjs";
 
 const run = promisify(execFile);
-const MARKETPLACE = "factory-marketplace";
-const PLUGIN = `dev-factory@${MARKETPLACE}`;
-const REPO = "enderdev01/la-fruteria";
+const MARKETPLACE = "juicebar";
+const PLUGIN = `skuizops@${MARKETPLACE}`;
+const REPO = "enderdev01/skuizops";
 
 // --- pure helpers (tested) ---
 
@@ -22,10 +22,10 @@ export const pickMarketplaceAction = (list) => (list.some((m) => m.name === MARK
 export const pickPluginAction = (list) => (list.some((p) => p.id === PLUGIN) ? "update" : "install");
 export const pluginVersion = (list) => list.find((p) => p.id === PLUGIN)?.version ?? null;
 
-const LEMON = "dev-factory:lemon";
+const LEMON = "skuizops:lemon";
 const WEB_DEPS = ["vite", "next", "react", "react-dom", "vue", "svelte", "@sveltejs/kit", "nuxt", "astro", "@angular/core", "solid-js", "preact", "@remix-run/react"];
 
-// Sets "agent": "dev-factory:lemon" in <root>/.claude/settings.json without ever overwriting what the user has.
+// Sets "agent": "skuizops:lemon" in <root>/.claude/settings.json without ever overwriting what the user has.
 export function setLemonAgent(root) {
   const file = join(root, ".claude", "settings.json");
   let settings = {};
@@ -69,8 +69,8 @@ export function setAutoUpdate(home) {
   const next = { ...settings, extraKnownMarketplaces: { ...settings.extraKnownMarketplaces, [MARKETPLACE]: { ...entry, source, autoUpdate: true } } };
   mkdirSync(join(home, ".claude"), { recursive: true });
   // Write then rename: a crash mid-write must not truncate the user's settings.
-  writeFileSync(`${file}.dev-factory-tmp`, `${JSON.stringify(next, null, 2)}\n`);
-  renameSync(`${file}.dev-factory-tmp`, file);
+  writeFileSync(`${file}.skuizops-tmp`, `${JSON.stringify(next, null, 2)}\n`);
+  renameSync(`${file}.skuizops-tmp`, file);
   return { status: "ok", message: "on" };
 }
 
@@ -102,7 +102,7 @@ export function welcomePrompt({ oldVersion, newVersion, backups = [], configured
   const what = !oldVersion ? `installed v${newVersion}` : oldVersion !== newVersion ? `updated from v${oldVersion} to v${newVersion}` : `confirmed up to date at v${newVersion}`;
   const saved = backups.length ? ` These files had local edits and were backed up before being replaced: ${backups.join(", ")}. Tell the user where the backups are.` : "";
   const conf = configured.length ? ` The setup also did this: ${configured.join("; ")}. Mention it in one line. Settings changed, so the lemon orchestrator applies to NEW sessions, not this one: tell the user to open a new session to get it.` : "";
-  return `dev-factory was just ${what} in this project by the setup command.${saved}${conf} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill. Do not run any command.`;
+  return `skuizops was just ${what} in this project by the setup command.${saved}${conf} Greet the user in one short line in the language they have been using in this session (Spanish if there is no history), say what changed in one or two lines, and if the project has no .claude/verification directory, suggest running the create-verification-skill skill. Do not run any command.`;
 }
 
 export function hasSession(cwd, home = homedir()) {
@@ -168,7 +168,7 @@ const gitRoot = async (cwd) => {
 
 async function main() {
   const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-  out(`\n${paint("1;35", "dev-factory")} ${dim(`v${version}`)}\n`);
+  out(`\n${paint("1;35", "skuizops")} ${dim(`v${version}`)}\n`);
   const cwd = process.cwd();
   const env = { oldVersion: null, newVersion: null, backups: [], configured: [] };
   let failed = false;
@@ -202,7 +202,7 @@ async function main() {
   track(await step("Auto-update", async () => {
     const r = setAutoUpdate(homedir());
     if (r.status === "fail") throw new Error(r.message);
-    if (r.status === "ok") env.configured.push("turned on auto-update for the dev-factory marketplace, so new versions install on their own");
+    if (r.status === "ok") env.configured.push("turned on auto-update for the skuizops marketplace, so new versions install on their own");
     return { status: r.status, text: r.message };
   }));
 

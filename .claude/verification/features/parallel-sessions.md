@@ -1,10 +1,10 @@
 # Parallel sessions
 
-Script: `plugins/dev-factory/scripts/sessions.mjs start|end|touch`, hooks `SessionStart`, `SessionEnd` and `PreToolUse` (every tool), JSON on stdin (`session_id`, `cwd`). It never blocks: any error ends with exit 0 and no output.
+Script: `plugins/skuizops/scripts/sessions.mjs start|end|touch`, hooks `SessionStart`, `SessionEnd` and `PreToolUse` (every tool), JSON on stdin (`session_id`, `cwd`). It never blocks: any error ends with exit 0 and no output.
 
-Registry: one `<session_id>.json` per session in `<git common dir>/dev-factory-sessions`, shared by every worktree. An entry not touched for 12 hours is dead.
+Registry: one `<session_id>.json` per session in `<git common dir>/skuizops-sessions`, shared by every worktree. An entry not touched for 12 hours is dead.
 
-Exercise: in a throwaway repo under the scope roots (`DEV_FACTORY_ROOTS=<repo>`):
+Exercise: in a throwaway repo under the scope roots (`SKUIZOPS_ROOTS=<repo>`):
 
 ```
 echo '{"session_id":"a","cwd":"<repo>"}' | node sessions.mjs start
@@ -14,9 +14,9 @@ echo '{"session_id":"b","cwd":"<repo>"}' | node sessions.mjs start
 | Input | Expected (observed) |
 |---|---|
 | session `a` starts alone | nothing, exit 0 |
-| session `b` starts while `a` is live in the same checkout | `dev-factory: 1 other live session(s) already use this checkout (branch: master). Do not edit files, switch branches or commit in this checkout. Do every change in your own git worktree created from the repository's default branch, following the "Worktrees" section of your instructions. Reading files here is fine.` exit 0 |
+| session `b` starts while `a` is live in the same checkout | `skuizops: 1 other live session(s) already use this checkout (branch: master). Do not edit files, switch branches or commit in this checkout. Do every change in your own git worktree created from the repository's default branch, following the "Worktrees" section of your instructions. Reading files here is fine.` exit 0 |
 | empty stdin, or a cwd that is not a git repo | nothing, exit 0 |
-| more than 4 live sessions on the repo | extra line: `dev-factory: warning, more than 4 sessions are live on this repository.` |
+| more than 4 live sessions on the repo | extra line: `skuizops: warning, more than 4 sessions are live on this repository.` |
 
 ## Edge cases
 

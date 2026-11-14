@@ -1,18 +1,18 @@
 # Update notice
 
-Script: `plugins/dev-factory/scripts/update-check.mjs`, hook `SessionStart`, JSON on stdin (ignored). It never blocks: any error ends with exit 0 and no output.
+Script: `plugins/skuizops/scripts/update-check.mjs`, hook `SessionStart`, JSON on stdin (ignored). It never blocks: any error ends with exit 0 and no output.
 
-Installed version: `version` in the plugin's own `.claude-plugin/plugin.json`. Latest version: for a `directory` marketplace, the `plugin.json` in that directory; for any other source, `git fetch origin HEAD` in the marketplace clone (the user's own git credentials, no prompt, 5 s timeout) and `git show FETCH_HEAD:plugins/dev-factory/.claude-plugin/plugin.json`. The remote answer, or its failure, is cached in `~/.claude/dev-factory-update-check.json` for 24 hours.
+Installed version: `version` in the plugin's own `.claude-plugin/plugin.json`. Latest version: for a `directory` marketplace, the `plugin.json` in that directory; for any other source, `git fetch origin HEAD` in the marketplace clone (the user's own git credentials, no prompt, 5 s timeout) and `git show FETCH_HEAD:plugins/skuizops/.claude-plugin/plugin.json`. The remote answer, or its failure, is cached in `~/.claude/skuizops-update-check.json` for 24 hours.
 
 Exercise:
 
 ```
-node --test plugins/dev-factory/scripts/update-check.test.mjs
+node --test plugins/skuizops/scripts/update-check.test.mjs
 ```
 
 | Input | Expected (observed) |
 |---|---|
-| installed version behind the marketplace's | one paragraph naming both versions, asking the orchestrator to ask the human, with `claude plugin marketplace update factory-marketplace` and `claude plugin update dev-factory@factory-marketplace`, exit 0 |
+| installed version behind the marketplace's | one paragraph naming both versions, asking the orchestrator to ask the human, with `claude plugin marketplace update juicebar` and `claude plugin update skuizops@juicebar`, exit 0 |
 | same version, offline, no marketplaces file, or any error | nothing, exit 0 |
 
 Observed output:

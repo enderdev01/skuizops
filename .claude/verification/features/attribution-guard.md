@@ -1,6 +1,6 @@
 # Attribution guard
 
-Script: `plugins/dev-factory/scripts/attribution-guard.mjs <message-file>`, run by the `commit-msg` git hook. It blocks with exit 1.
+Script: `plugins/skuizops/scripts/attribution-guard.mjs <message-file>`, run by the `commit-msg` git hook. It blocks with exit 1.
 
 Exercise: `node scripts/control.mjs bench`.
 

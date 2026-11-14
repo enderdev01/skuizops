@@ -1,6 +1,6 @@
 # Leftovers notice
 
-Script: `plugins/dev-factory/scripts/leftovers.mjs`, hook `SessionStart`, JSON on stdin (cwd of the session). It never blocks and never deletes: any error ends with exit 0 and no output. No network call.
+Script: `plugins/skuizops/scripts/leftovers.mjs`, hook `SessionStart`, JSON on stdin (cwd of the session). It never blocks and never deletes: any error ends with exit 0 and no output. No network call.
 
 Leftovers, in the git root of the session: installer backups (`*.local-<YYYYMMDD-HHMMSS>` directly in `.githooks` and `scripts/guard`); local branches merged into the remote default branch (`origin/HEAD`, else `origin/develop`, `origin/main`, `origin/master`; none found means no branches or worktrees) minus the current, protected and worktree-checked-out ones; linked worktrees whose branch is merged and whose `git status --porcelain` is empty.
 
@@ -9,8 +9,8 @@ Path guard finding: `commandViolation("rm scripts/guard/x.mjs.local-...")` and t
 Exercise:
 
 ```
-node --test plugins/dev-factory/scripts/leftovers.test.mjs
-echo '{}' | node plugins/dev-factory/scripts/leftovers.mjs
+node --test plugins/skuizops/scripts/leftovers.test.mjs
+echo '{}' | node plugins/skuizops/scripts/leftovers.mjs
 ```
 
 | Input | Expected (observed) |
@@ -21,7 +21,7 @@ echo '{}' | node plugins/dev-factory/scripts/leftovers.mjs
 Observed output (second command, from this repo's root):
 
 ```
-dev-factory: earlier sessions left leftovers in this checkout: 16 merged local branch(es) (feat/install-hooks-command, feat/lighter-cherry, ..., fix/use-hook-templates). List them to the human and ask whether to clean them. Only on a yes, run `git worktree remove <path>` (never `--force`) and `git branch -d <name>` (never `-D`); the guard blocks deleting backup files, so show the human the `rm` command for the backups instead. Never delete anything without a yes.
+skuizops: earlier sessions left leftovers in this checkout: 16 merged local branch(es) (feat/install-hooks-command, feat/lighter-cherry, ..., fix/use-hook-templates). List them to the human and ask whether to clean them. Only on a yes, run `git worktree remove <path>` (never `--force`) and `git branch -d <name>` (never `-D`); the guard blocks deleting backup files, so show the human the `rm` command for the backups instead. Never delete anything without a yes.
 ```
 
 Observed output (first command):

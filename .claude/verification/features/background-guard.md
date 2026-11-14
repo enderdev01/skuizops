@@ -1,6 +1,6 @@
 # Background guard
 
-Script: `plugins/dev-factory/scripts/background-guard.mjs` (PreToolUse Bash, JSON on stdin). It blocks with exit 2 when `agent_id` is set and `tool_input.run_in_background` is `true`.
+Script: `plugins/skuizops/scripts/background-guard.mjs` (PreToolUse Bash, JSON on stdin). It blocks with exit 2 when `agent_id` is set and `tool_input.run_in_background` is `true`.
 
 Exercise: `node scripts/control.mjs bench`.
 

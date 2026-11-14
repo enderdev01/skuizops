@@ -5,8 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { commitViolation } from "../plugins/dev-factory/scripts/branch-guard.mjs";
-import { trustFile } from "../plugins/dev-factory/scripts/scope.mjs";
+import { commitViolation } from "../plugins/skuizops/scripts/branch-guard.mjs";
+import { trustFile } from "../plugins/skuizops/scripts/scope.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
@@ -56,9 +56,9 @@ function hookProblem() {
   const guards = { "pre-commit": "branch-guard.mjs", "pre-merge-commit": "branch-guard.mjs", "pre-push": "branch-guard.mjs", "commit-msg": "attribution-guard.mjs" };
   for (const [name, guard] of Object.entries(guards)) {
     const file = join(root, ".githooks", name);
-    if (!existsSync(file)) return `.githooks/${name} is missing. Copy it from the dev-factory plugin templates/githooks`;
+    if (!existsSync(file)) return `.githooks/${name} is missing. Copy it from the skuizops plugin templates/githooks`;
     if (!(statSync(file).mode & 0o111)) return `.githooks/${name} is not executable. Run: chmod +x .githooks/${name}`;
-    if (!readFileSync(file, "utf8").includes(guard)) return `.githooks/${name} does not run ${guard}. Restore it from the dev-factory plugin templates/githooks`;
+    if (!readFileSync(file, "utf8").includes(guard)) return `.githooks/${name} does not run ${guard}. Restore it from the skuizops plugin templates/githooks`;
   }
   return null;
 }
@@ -87,10 +87,10 @@ async function verify() {
   }));
   const names = ["plugin tests", "bin tests", "validate marketplace", "validate plugin", `syntax check (${files.length} files)`];
   const results = await Promise.all([
-    runAsync("node", ["--test", "plugins/dev-factory/scripts/"]),
+    runAsync("node", ["--test", "plugins/skuizops/scripts/"]),
     runAsync("node", ["--test", "bin/"]),
     runAsync("claude", ["plugin", "validate", root]),
-    runAsync("claude", ["plugin", "validate", join(root, "plugins", "dev-factory")]),
+    runAsync("claude", ["plugin", "validate", join(root, "plugins", "skuizops")]),
     syntaxStep,
   ]);
   const steps = results.map((r, i) => ({ step: names[i], ...r }));
@@ -142,7 +142,7 @@ function benchGate(repo, env) {
     for (let i = 0; i < BENCH_RUNS; i++) {
       if (change) writeFileSync(join(repo, "notes.txt"), `${i}`);
       const start = process.hrtime.bigint();
-      r = spawnSync("node", [join(root, "plugins", "dev-factory", "scripts", "verify-gate.mjs")], { cwd: repo, env: gateEnv, encoding: "utf8", input: JSON.stringify({ cwd: repo }) });
+      r = spawnSync("node", [join(root, "plugins", "skuizops", "scripts", "verify-gate.mjs")], { cwd: repo, env: gateEnv, encoding: "utf8", input: JSON.stringify({ cwd: repo }) });
       times.push(Number(process.hrtime.bigint() - start) / 1e6);
     }
     const verified = runs() - before;
@@ -151,9 +151,9 @@ function benchGate(repo, env) {
 }
 
 function bench() {
-  const repo = mkdtempSync(join(tmpdir(), "dev-factory-bench-"));
+  const repo = mkdtempSync(join(tmpdir(), "skuizops-bench-"));
   // The Claude hooks only act under the scope roots: add the throwaway repo to them.
-  const env = { ...process.env, DEV_FACTORY_ROOTS: repo, CLAUDE_PROJECT_DIR: repo };
+  const env = { ...process.env, SKUIZOPS_ROOTS: repo, CLAUDE_PROJECT_DIR: repo };
   const msgFile = join(repo, "COMMIT_MSG");
   const median = (xs) => xs.sort((a, b) => a - b)[Math.floor(xs.length / 2)];
   let rows;
@@ -162,7 +162,7 @@ function bench() {
     rows = BENCH_CASES.map(([guard, mode, input, expectBlock]) => {
       const isMsg = typeof input === "string";
       if (isMsg) writeFileSync(msgFile, input);
-      const guardArgs = [join(root, "plugins", "dev-factory", "scripts", guard), ...(isMsg ? [msgFile] : mode ? [mode] : [])];
+      const guardArgs = [join(root, "plugins", "skuizops", "scripts", guard), ...(isMsg ? [msgFile] : mode ? [mode] : [])];
       const times = [];
       let r;
       for (let i = 0; i < BENCH_RUNS; i++) {

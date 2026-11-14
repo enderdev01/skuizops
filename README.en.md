@@ -1,4 +1,4 @@
-<h1 align="center">🍋 la-fruteria</h1>
+<h1 align="center">🍋 skuizops</h1>
 
 <h3 align="center">Five fruits work your code. Nothing rotten reaches <code>main</code>.</h3>
 
@@ -34,7 +34,7 @@ Each fruit does one job. The expensive model is used only where it is needed.
 
 ## Nothing rotten reaches `main`
 
-| Without the plugin | With `dev-factory` |
+| Without the plugin | With `skuizops` |
 |---|---|
 | The agent commits straight to `main` | Blocked. It must create a `feat/`, `fix/` or `hotfix/` branch |
 | The agent disables the git hooks to get around a rule | Blocked. It cannot touch those files |
@@ -48,7 +48,7 @@ It has no dependencies (Node only) and each check takes about 50 ms: you do not 
 One command, inside your project:
 
 ```bash
-npx github:enderdev01/la-fruteria
+npx github:enderdev01/skuizops
 ```
 
 That is all. The command:
@@ -65,8 +65,8 @@ To update, run the same command again.
 <summary>Manual install</summary>
 
 ```bash
-claude plugin marketplace add enderdev01/la-fruteria
-claude plugin install dev-factory@factory-marketplace
+claude plugin marketplace add enderdev01/skuizops
+claude plugin install skuizops@juicebar
 ```
 
 Then, in each project under `~/DEV`:
@@ -74,7 +74,7 @@ Then, in each project under `~/DEV`:
 | Step | What to do | Why |
 |---|---|---|
 | 1 | Ask Claude to run the `create-verification-skill` skill | It creates the verification script, the git hooks and the feature map |
-| 2 | Type `/dev-factory:trust` in the session | It lets the plugin run that project's tests |
+| 2 | Type `/skuizops:trust` in the session | It lets the plugin run that project's tests |
 | 3 | Open a new session and work as usual | The protections act on their own |
 
 </details>
@@ -105,7 +105,7 @@ It is blocked, gets the reason and creates a `feat/` branch on its own.
 | `check-file` | The file just edited, with ESLint | A lint error the agent left behind |
 | `verify-gate` | The project's tests, on finish | Calling a task done with broken tests |
 
-Full detail on rules, scope and the trust model: [plugins/dev-factory/README.md](plugins/dev-factory/README.md).
+Full detail on rules, scope and the trust model: [plugins/skuizops/README.md](plugins/skuizops/README.md).
 
 ## More detail
 

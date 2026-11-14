@@ -33,12 +33,12 @@ describe("add vs update", () => {
   it("marketplace", () => {
     assert.equal(pickMarketplaceAction([]), "add");
     assert.equal(pickMarketplaceAction([{ name: "other" }]), "add");
-    assert.equal(pickMarketplaceAction([{ name: "other" }, { name: "factory-marketplace" }]), "update");
+    assert.equal(pickMarketplaceAction([{ name: "other" }, { name: "juicebar" }]), "update");
   });
   it("plugin", () => {
     assert.equal(pickPluginAction([]), "install");
-    assert.equal(pickPluginAction([{ id: "dev-factory@other" }]), "install");
-    assert.equal(pickPluginAction([{ id: "dev-factory@factory-marketplace", version: "1" }]), "update");
+    assert.equal(pickPluginAction([{ id: "skuizops@other" }]), "install");
+    assert.equal(pickPluginAction([{ id: "skuizops@juicebar", version: "1" }]), "update");
   });
 });
 
@@ -56,13 +56,13 @@ describe("hasSession", () => {
 });
 
 describe("setAutoUpdate", () => {
-  const source = { source: "github", repo: "enderdev01/la-fruteria" };
+  const source = { source: "github", repo: "enderdev01/skuizops" };
   // A fake home: `settings` is the text of settings.json (null: no file), `known` registers the marketplace.
   const home = (settings, known = true) => {
     const dir = mkdtempSync(join(tmpdir(), "setup-auto-"));
     mkdirSync(join(dir, ".claude", "plugins"), { recursive: true });
     if (settings !== null) writeFileSync(join(dir, ".claude", "settings.json"), settings);
-    if (known) writeFileSync(join(dir, ".claude", "plugins", "known_marketplaces.json"), JSON.stringify({ "factory-marketplace": { source } }));
+    if (known) writeFileSync(join(dir, ".claude", "plugins", "known_marketplaces.json"), JSON.stringify({ "juicebar": { source } }));
     return dir;
   };
   const file = (dir) => join(dir, ".claude", "settings.json");
@@ -71,23 +71,23 @@ describe("setAutoUpdate", () => {
   it("turns it on with the registered source and keeps every other setting", () => {
     const dir = home(JSON.stringify({ outputStyle: "x", extraKnownMarketplaces: { other: { autoUpdate: false } } }));
     assert.deepEqual(setAutoUpdate(dir), { status: "ok", message: "on" });
-    assert.deepEqual(read(dir), { outputStyle: "x", extraKnownMarketplaces: { other: { autoUpdate: false }, "factory-marketplace": { source, autoUpdate: true } } });
+    assert.deepEqual(read(dir), { outputStyle: "x", extraKnownMarketplaces: { other: { autoUpdate: false }, "juicebar": { source, autoUpdate: true } } });
     assert.deepEqual(readdirSync(join(dir, ".claude")).sort(), ["plugins", "settings.json"]);
   });
   it("creates the settings file when missing", () => {
     const dir = home(null);
     assert.equal(setAutoUpdate(dir).status, "ok");
-    assert.equal(read(dir).extraKnownMarketplaces["factory-marketplace"].autoUpdate, true);
+    assert.equal(read(dir).extraKnownMarketplaces["juicebar"].autoUpdate, true);
   });
   it("keeps the entry's own source", () => {
     const own = { source: "directory", path: "/x" };
-    const dir = home(JSON.stringify({ extraKnownMarketplaces: { "factory-marketplace": { source: own } } }));
+    const dir = home(JSON.stringify({ extraKnownMarketplaces: { "juicebar": { source: own } } }));
     setAutoUpdate(dir);
-    assert.deepEqual(read(dir).extraKnownMarketplaces["factory-marketplace"], { source: own, autoUpdate: true });
+    assert.deepEqual(read(dir).extraKnownMarketplaces["juicebar"], { source: own, autoUpdate: true });
   });
   for (const [value, message] of [[true, "already on"], [false, "kept your setting (off)"]]) {
     it(`leaves the file untouched when autoUpdate is ${value}`, () => {
-      const text = JSON.stringify({ extraKnownMarketplaces: { "factory-marketplace": { source, autoUpdate: value } } });
+      const text = JSON.stringify({ extraKnownMarketplaces: { "juicebar": { source, autoUpdate: value } } });
       const dir = home(text);
       assert.deepEqual(setAutoUpdate(dir), { status: "skip", message });
       assert.equal(readFileSync(file(dir), "utf8"), text);
@@ -118,17 +118,17 @@ describe("setLemonAgent", () => {
   it("creates the file when missing", () => {
     const root = project();
     assert.equal(setLemonAgent(root).status, "ok");
-    assert.equal(read(root), '{\n  "agent": "dev-factory:lemon"\n}\n');
+    assert.equal(read(root), '{\n  "agent": "skuizops:lemon"\n}\n');
   });
   it("skips when already set", () => {
-    const root = withSettings('{"agent":"dev-factory:lemon"}');
+    const root = withSettings('{"agent":"skuizops:lemon"}');
     assert.equal(setLemonAgent(root).status, "skip");
-    assert.equal(read(root), '{"agent":"dev-factory:lemon"}');
+    assert.equal(read(root), '{"agent":"skuizops:lemon"}');
   });
   it("adds the key and keeps the others", () => {
     const root = withSettings('{"model":"opus","env":{"A":"1"}}');
     assert.equal(setLemonAgent(root).status, "ok");
-    assert.deepEqual(JSON.parse(read(root)), { model: "opus", env: { A: "1" }, agent: "dev-factory:lemon" });
+    assert.deepEqual(JSON.parse(read(root)), { model: "opus", env: { A: "1" }, agent: "skuizops:lemon" });
     assert.ok(read(root).endsWith("}\n"));
   });
   it("keeps a different agent", () => {
