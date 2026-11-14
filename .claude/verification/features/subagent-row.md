@@ -1,6 +1,6 @@
 # Subagent status row
 
-Script: `plugins/dev-factory/scripts/subagent-row.mjs`, wired as `subagentStatusLine` in `plugins/dev-factory/settings.json`. It reads `{columns, tasks}` on stdin and prints one `{"id","content"}` JSON line per task. It never blocks.
+Script: `plugins/skuizops/scripts/subagent-row.mjs`, wired as `subagentStatusLine` in `plugins/skuizops/settings.json`. It reads `{columns, tasks}` on stdin and prints one `{"id","content"}` JSON line per task. It never blocks.
 
 Exercise: `node scripts/control.mjs verify` runs `subagent-row.test.mjs`; all 15 cases pass.
 
@@ -8,7 +8,7 @@ Exercise: `node scripts/control.mjs verify` runs `subagent-row.test.mjs`; all 15
 |---|---|
 | `kiwi`, completed, 1200 tokens | `🥝 kiwi · search · haiku · 1k tok ✓` |
 | `fig` / `mango` / `lemon` / `cherry` | 🫐 / 🥭 / 🍋 / 🍒 |
-| Agent type without the `dev-factory:` prefix | Same fruit as with the prefix |
+| Agent type without the `skuizops:` prefix | Same fruit as with the prefix |
 | Agent outside the factory | Neutral marker |
 
 ## Edge cases

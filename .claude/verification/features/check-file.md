@@ -1,6 +1,6 @@
 # Lint on edit
 
-Script: `plugins/dev-factory/scripts/check-file.mjs` (PostToolUse Edit|Write). It reads `tool_input.file_path` and runs `npx --no-install eslint --no-warn-ignored <file>`. On failure it exits 2 with `ESLint failed on <file>. Fix it before continuing:` plus the ESLint output.
+Script: `plugins/skuizops/scripts/check-file.mjs` (PostToolUse Edit|Write). It reads `tool_input.file_path` and runs `npx --no-install eslint --no-warn-ignored <file>`. On failure it exits 2 with `ESLint failed on <file>. Fix it before continuing:` plus the ESLint output.
 
 Exercise: `node scripts/control.mjs verify` only syntax-checks it: there is no `check-file.test.mjs`. Observed by piping input in this repo:
 

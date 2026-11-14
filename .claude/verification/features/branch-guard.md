@@ -1,6 +1,6 @@
 # Branch guard
 
-Script: `plugins/dev-factory/scripts/branch-guard.mjs <mode>`, with mode `claude` (PreToolUse Bash hook, JSON on stdin), `pre-commit`, `pre-merge-commit` or `pre-push` (git hooks). It blocks with exit 2 and the reason on stderr.
+Script: `plugins/skuizops/scripts/branch-guard.mjs <mode>`, with mode `claude` (PreToolUse Bash hook, JSON on stdin), `pre-commit`, `pre-merge-commit` or `pre-push` (git hooks). It blocks with exit 2 and the reason on stderr.
 
 Exercise: `node scripts/control.mjs bench`, which runs it in a throwaway repo on `main`.
 
@@ -16,7 +16,7 @@ Exercise: `node scripts/control.mjs bench`, which runs it in a throwaway repo on
 ## Edge cases
 
 - Empty stdin: parsed as `{}`, allowed.
-- Project outside the scope roots (`~/DEV` plus `DEV_FACTORY_ROOTS`): allowed, the guard does not act.
+- Project outside the scope roots (`~/DEV` plus `SKUIZOPS_ROOTS`): allowed, the guard does not act.
 - Reading the setting is caught too: `git config core.hooksPath` with no value was blocked in this session, so use `grep hooksPath .git/config` to read it.
 - Matches command text: interpreters and variables can bypass it (best effort, documented in the code).
 - Target dir (session on `develop`, worktree `../wt` on `fix/x`): `git -C ../wt commit -m x` and `cd ../wt && git commit -m x` are judged by `fix/x` and allowed, also with a safe heredoc message, a trailing `2>&1` / `>/dev/null` / `| tail|head|cat`, `&&`-chained `git -C <same path>` parts, and `~/` paths. Any other shape (`pushd`, subshells, `$VAR`, `cd wt` without `./`) is judged by the session branch.
