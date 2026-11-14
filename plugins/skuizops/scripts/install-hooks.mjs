@@ -16,6 +16,12 @@ const git = (root, ...args) => execFileSync("git", ["-C", root, ...args], { enco
 const sha = (buf) => createHash("sha256").update(buf).digest("hex");
 const stamp = () => new Date().toISOString().replace(/\D/g, "").replace(/^(\d{8})(\d{6}).*/, "$1-$2");
 
+// What the installer installs: { from, rel (relative to the project root), mode }.
+export const sources = () => [
+  ...readdirSync(templates).map((name) => ({ from: join(templates, name), rel: `.githooks/${name}`, mode: 0o755 })),
+  ...GUARDS.map((name) => ({ from: join(here, name), rel: `scripts/guard/${name}` })),
+];
+
 // Returns { root, actions, backups }: one line per action. Plugin-owned copies are updated; a copy the user edited
 // is saved as <file>.local-<timestamp> first. Other files are left alone. .githooks/.skuizops.json records what we wrote.
 export function installHooks(dir, env = process.env) {
@@ -64,8 +70,7 @@ export function installHooks(dir, env = process.env) {
     }
     if (mode) chmodSync(to, mode);
   };
-  for (const name of readdirSync(templates)) put(join(templates, name), join(hooks, name), 0o755);
-  for (const name of GUARDS) put(join(here, name), join(guard, name));
+  for (const { from, rel, mode } of sources()) put(from, join(root, rel), mode);
   let previous = "";
   try {
     previous = git(root, "config", "--local", "core.hooksPath");

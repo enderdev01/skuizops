@@ -7,7 +7,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inScope, isMain, isTrusted, projectDir } from "./scope.mjs";
+import { sources } from "./install-hooks.mjs";
+import { inScope, isMain,isTrusted, projectDir } from "./scope.mjs";
 
 const ID = "skuizops@juicebar";
 const LEMON = "skuizops:lemon";
@@ -45,7 +46,7 @@ function pluginRow(home, project, version) {
   const flags = [join(home, ".claude", "settings.json"), join(project, ".claude", "settings.json")].map((f) => readJson(f)?.enabledPlugins?.[ID]);
   if (!entry) return fail("plugin", `not installed. Run the installer: ${INSTALL}`);
   if (!flags.includes(true) || flags.includes(false)) return fail("plugin", `installed but not enabled. Run the installer: ${INSTALL}`);
-  return ok("plugin", `v${entry.version ?? version}`);
+  return ok("plugin", `v${version}`);
 }
 
 function agentRow({ settings, problem }, pluginRoot) {
@@ -61,28 +62,28 @@ function agentRow({ settings, problem }, pluginRoot) {
   return ok("default agent", agent);
 }
 
-// Problems of the git hooks and of the guard copies, compared with what the install recorded in the manifest.
-function hookProblems(project, version) {
+// Problems of the git hooks and of the guard copies, compared by content with what the plugin installs now.
+function hookProblems(project) {
   const hooks = [];
   const guards = [];
   const path = spawnSync("git", ["-C", project, "config", "--local", "--get", "core.hooksPath"], { encoding: "utf8" });
   if (path.stdout?.trim() !== ".githooks") hooks.push("core.hooksPath is not .githooks");
   const manifest = readJson(join(project, ".githooks", ".skuizops.json"));
   if (!manifest?.files) return { hooks: [...hooks, "no .githooks/.skuizops.json manifest"], guards: ["no manifest"] };
-  if (manifest.version !== version) hooks.push(`the manifest is for v${manifest.version}, the plugin is v${version}`);
-  for (const [rel, hash] of Object.entries(manifest.files)) {
+  for (const { from, rel, mode } of sources()) {
     const file = join(project, rel);
     const isGuard = rel.startsWith("scripts/guard/");
     let problem = null;
     try {
-      if (sha(readFileSync(file)) !== hash) problem = `${rel} was edited`;
-      else if (!isGuard && !(statSync(file).mode & 0o111)) problem = `${rel} is not executable`;
+      const current = sha(readFileSync(file));
+      if (current !== sha(readFileSync(from))) problem = `${rel} ${current === manifest.files[rel] ? "is outdated" : "was edited"}`;
+      else if (mode && !(statSync(file).mode & 0o111)) problem = `${rel} is not executable`;
     } catch {
       problem = `${rel} is missing`;
     }
     if (problem) (isGuard ? guards : hooks).push(problem);
   }
-  return { hooks, guards };
+  return { hooks, guards, installedBy: manifest.version };
 }
 
 // What remains of the old name dev-factory, read from the rename commit: files, settings keys, user config.
@@ -103,13 +104,13 @@ function oldNames(project, home, { settings }, installed) {
 export function check({ project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)) }) {
   const { version } = readJson(join(pluginRoot, ".claude-plugin", "plugin.json")) ?? {};
   const config = projectSettings(project);
-  const { hooks, guards } = hookProblems(project, version);
+  const { hooks, guards, installedBy } = hookProblems(project);
   const installed = readJson(join(home, ".claude", "plugins", "installed_plugins.json"))?.plugins;
   const old = oldNames(project, home, config, installed);
   return [
     pluginRow(home, project, version),
     agentRow(config, pluginRoot),
-    hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks"),
+    hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
     guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
     isTrusted(project, { ...env, HOME: home }) ? ok("trusted project") : fail("trusted project", "/skuizops:trust"),
     old.length ? fail("old-name leftovers", old.join("; ")) : ok("old-name leftovers"),
