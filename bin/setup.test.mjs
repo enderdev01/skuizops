@@ -157,6 +157,7 @@ describe("Playwright detection", () => {
   });
   it("detects playwright", () => {
     assert.equal(hasPlaywright({ devDependencies: { playwright: "1" } }), true);
+    assert.equal(hasPlaywright({ devDependencies: { "@playwright/test": "1" } }), true);
     assert.equal(hasPlaywright({ dependencies: { react: "1" } }), false);
   });
   it("picks the package manager by lockfile", () => {

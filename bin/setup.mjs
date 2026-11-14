@@ -82,7 +82,8 @@ const readPackage = (root) => {
   }
 };
 export const hasWebUi = (pkg) => WEB_DEPS.some((d) => d in { ...pkg?.dependencies, ...pkg?.devDependencies });
-export const hasPlaywright = (pkg) => "playwright" in { ...pkg?.dependencies, ...pkg?.devDependencies };
+// @playwright/test ships the same `playwright` binary, so adding `playwright` next to it only duplicates it.
+export const hasPlaywright = (pkg) => ["playwright", "@playwright/test"].some((d) => d in { ...pkg?.dependencies, ...pkg?.devDependencies });
 // Package manager by lockfile (files: names present in the project root) -> [command, ...args] that adds playwright as a dev dependency.
 export function playwrightInstallCommand(files) {
   const has = (f) => files.includes(f);
@@ -149,6 +150,12 @@ async function step(label, fn) {
   return result;
 }
 
+// Runs with the terminal attached, so a long download shows its own progress instead of a silent spinner.
+const runShown = (cmd, args, cwd) =>
+  new Promise((resolve, reject) =>
+    spawn(cmd, args, { cwd, stdio: "inherit" })
+      .on("error", reject)
+      .on("exit", (code, signal) => (code === 0 ? resolve() : reject(new Error(`${cmd} ${args.join(" ")} failed with ${signal ?? `exit code ${code}`}`)))));
 const claude = (...args) => run("claude", args, { maxBuffer: 1 << 24 });
 const claudeJson = async (...args) => JSON.parse((await claude(...args)).stdout);
 const gitRoot = async (cwd) => {
@@ -224,7 +231,7 @@ async function main() {
     return { status: r.status, text: r.message };
   }));
 
-  track(await step("Playwright", async () => {
+  track(await step("Playwright", async ({ pause }) => {
     const pkg = readPackage(project);
     if (!hasWebUi(pkg)) return { status: "skip", text: "no web UI detected" };
     const had = hasPlaywright(pkg);
@@ -233,7 +240,9 @@ async function main() {
         const [cmd, ...cmdArgs] = playwrightInstallCommand(readdirSync(project));
         await run(cmd, cmdArgs, { cwd: project, maxBuffer: 1 << 24 });
       }
-      await run("npx", ["playwright", "install", "chromium"], { cwd: project, maxBuffer: 1 << 24 });
+      pause();
+      out(dim("  Playwright: checking Chromium (a first download can take a few minutes)"));
+      await runShown("npx", ["playwright", "install", "chromium"], project);
     } catch (error) {
       throw new Error(firstErrorLine(error.stderr || error.message));
     }
