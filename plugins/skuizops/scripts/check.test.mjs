@@ -2,6 +2,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,15 +79,36 @@ describe("check", () => {
     assert.equal(s.row("old-name leftovers").status, "ok");
   });
 
-  it("fails git hooks when a hook was edited or the manifest is of another version", () => {
+  it("fails git hooks when a hook was edited", () => {
     const s = sandbox();
     appendFileSync(join(s.project, ".githooks", "pre-commit"), "# edited\n");
     assert.match(s.row("git hooks").text, /\/skuizops:install-hooks .*pre-commit was edited/);
-    const t = sandbox();
-    const manifest = join(t.project, ".githooks", ".skuizops.json");
+  });
+
+  it("fails git hooks as outdated when the hook differs from the plugin's but matches the manifest", () => {
+    const s = sandbox();
+    const manifest = join(s.project, ".githooks", ".skuizops.json");
+    const content = "#!/bin/sh\n# older\n";
+    writeFileSync(join(s.project, ".githooks", "pre-commit"), content);
+    const m = JSON.parse(readFileSync(manifest, "utf8"));
+    m.files[".githooks/pre-commit"] = createHash("sha256").update(content).digest("hex");
+    writeFileSync(manifest, JSON.stringify(m));
+    const r = s.row("git hooks");
+    assert.equal(r.status, "fail");
+    assert.match(r.text, /\/skuizops:install-hooks .*pre-commit is outdated/);
+  });
+
+  it("accepts identical hooks installed by another plugin version, and shows one plugin version", () => {
+    const s = sandbox();
+    const manifest = join(s.project, ".githooks", ".skuizops.json");
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, "utf8")), version: "0.0.1" }));
-    assert.equal(t.row("git hooks").status, "fail");
-    assert.equal(t.row("project guards").status, "ok");
+    writeFileSync(join(s.home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "skuizops@juicebar": [{ scope: "user", version: "0.0.1" }] } }));
+    const hooks = s.row("git hooks");
+    assert.equal(hooks.status, "ok");
+    assert.equal(format(hooks), `ok   git hooks (installed by v0.0.1, identical to v${version})`);
+    assert.equal(format(s.row("plugin")), `ok   plugin (v${version})`);
+    assert.equal(s.row("project guards").status, "ok");
+    assert.equal(notice(s.rows()), "");
   });
 
   it("fails project guards when a copy was edited", () => {
