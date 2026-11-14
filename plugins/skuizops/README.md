@@ -71,6 +71,16 @@ Type it in a Claude Code session opened in the project (or pass a directory: `/s
 mkdir -p .githooks scripts/guard && cp "$PLUGIN"/templates/githooks/* .githooks/ && cp "$PLUGIN"/scripts/{branch-guard,scope,attribution-guard}.mjs scripts/guard/ && chmod +x .githooks/* && git config core.hooksPath .githooks
 ```
 
+### Check the configuration
+
+To validate the skuizops setup of a project, use the `/skuizops:check` command:
+
+```
+/skuizops:check
+```
+
+It prints one row per check: the plugin is installed and enabled, the default agent exists, the git hooks and the guard copies match the installed version, the project is trusted, and nothing of the old `dev-factory` name remains. Each `FAIL` row says how to fix it; the language in effect and the verification map are informative rows. It only reads: it changes no file, works outside a git repository, and exits 1 when any check fails. Unlike the other two commands, agents may run it. A SessionStart hook runs it quietly (`check.mjs notice`) and asks lemon to tell you to run the command only when a check fails.
+
 ### Protected paths
 
 Agents cannot use Edit or Write on `.githooks/`, `scripts/guard/` or `.git/` in any project under the scope roots, on `~/.config/skuizops/`, or on `~/.claude/plugins/`. The same goes for `.claude/settings.json` and `.claude/settings.local.json` of those projects, and for your own `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.gitconfig`, `~/.config/git/` and shell profiles (`~/.zshrc`, `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`). Case variants and symlinks are resolved first. You change those files by hand, which is why the setup command (not the agents) does the hook and settings steps.

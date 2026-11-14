@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameS
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { check, format } from "../plugins/skuizops/scripts/check.mjs";
 import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
 import { isMain, isTrusted } from "../plugins/skuizops/scripts/scope.mjs";
 import { trust } from "../plugins/skuizops/scripts/trust.mjs";
@@ -251,6 +252,12 @@ async function main() {
     env.configured.push(had ? "Playwright was already installed" : "installed Playwright and Chromium");
     return had ? { status: "skip", text: "already installed" } : { status: "ok", text: "installed" };
   }));
+
+  // Reported but not tracked: a failed check tells the human what to fix, it is not an installer error.
+  await step("Check", async () => {
+    const rows = check({ project });
+    return { status: rows.some((r) => r.status === "fail") ? "fail" : "ok", details: rows.map(format) };
+  });
 
   out("");
   if (failed) {
