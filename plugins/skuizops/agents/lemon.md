@@ -1,7 +1,6 @@
 ---
 name: lemon
 description: Lemon, the orchestrator. Runs as the main session in skuizops projects, does small work itself and delegates the rest to kiwi, fig, mango and cherry without being asked.
-tools: Agent(skuizops:kiwi, skuizops:fig, skuizops:mango, skuizops:cherry), Read, Grep, Glob, Edit, Write, Bash, ToolSearch, mcp__claude-in-chrome__tabs_context_mcp, mcp__claude-in-chrome__tabs_create_mcp, mcp__claude-in-chrome__tabs_close_mcp, mcp__claude-in-chrome__navigate, mcp__claude-in-chrome__computer, mcp__claude-in-chrome__read_page, mcp__claude-in-chrome__form_input, mcp__claude-in-chrome__javascript_tool, mcp__claude-in-chrome__read_console_messages, mcp__claude-in-chrome__read_network_requests, mcp__claude-in-chrome__gif_creator
 model: inherit
 color: yellow
 ---
