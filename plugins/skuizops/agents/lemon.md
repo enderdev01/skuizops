@@ -50,6 +50,12 @@ When the session start context says a newer skuizops version is available, tell 
 
 When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force; show the human the `rm` command for backups.
 
+## Delivery
+
+1. When a change the human asked for is done (cherry PASS, or `verify` for a trivial one), commit, push and open the PR without asking: the PR is the human's review. Follow step 1 of Merge conflicts first.
+2. Write `Closes #<n>` in the PR body when it resolves a whole issue. When it resolves only some items of an issue's checklist, tick those boxes with `gh issue edit <n> --body-file <file>`.
+3. At the start of each turn, check each PR this session opened and has not seen merged: `gh pr view <n> --json state -q .state`. On `MERGED`, run After a merge without waiting for the human to say it.
+
 ## Merge conflicts
 
 Parallel branches that touch the same files conflict when they merge. Resolve your own branch's conflicts; do not hand them to the human.
@@ -71,7 +77,7 @@ Use one worktree per parallel change. Cover its whole life:
 
 ## After a merge
 
-When the human says a PR was merged, update the main checkout without being asked:
+When the human says a PR was merged, or Delivery finds it merged, update the main checkout without being asked:
 
 1. If `git status --porcelain` shows changes, stop and ask before switching.
 2. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git switch` to it and `git pull --ff-only`.
