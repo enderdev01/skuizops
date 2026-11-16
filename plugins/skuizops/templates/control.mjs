@@ -22,6 +22,7 @@ const HELP = `Usage: node scripts/control.mjs <command> [--json]
 Commands:
   doctor    Check the environment is ready (node, deps, git hooks, branch)
   verify    Run the project's typecheck, lint and test npm scripts that exist; report each step
+            Each step is cut after 10 minutes; set CONTROL_VERIFY_TIMEOUT_MS (milliseconds) to change it
 
   screenshot [route] [--out <file.png>] [--wait <ms>] [--full-page] [--port <n>]
             Headless screenshot of a route of the app, "/" by default (needs APP set and Playwright installed in the project)
@@ -35,6 +36,37 @@ function run(cmd, cmdArgs) {
   const start = Date.now();
   const r = spawnSync(cmd, cmdArgs, { cwd: root, encoding: "utf8" });
   return { ok: r.status === 0, ms: Date.now() - start, output: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+}
+
+// Async run with a timeout: detached so the step leads a process group and the kill reaches npm's shell and node grandchildren.
+function runStep(cmd, cmdArgs, timeoutMs) {
+  const start = Date.now();
+  return new Promise((done) => {
+    const child = spawn(cmd, cmdArgs, { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    let timedOut = false;
+    const collect = (d) => (output += d);
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      // A grandchild that escaped the group could keep the pipes open: do not wait for them.
+      setTimeout(() => finish(null), 1000);
+    }, timeoutMs);
+    let finished = false;
+    const finish = (code) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      child.stdout.destroy();
+      child.stderr.destroy();
+      const text = output.trim();
+      done({ ok: !timedOut && code === 0, ms: Date.now() - start, output: timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s\n${text}`.trim() : text, timedOut });
+    };
+    child.on("error", (e) => { output += e.message; finish(1); });
+    child.on("close", finish);
+  });
 }
 
 function report(ok, data, text) {
@@ -107,7 +139,13 @@ async function doctor() {
   report(ok, { checks }, text);
 }
 
-function verify() {
+async function verify() {
+  const timeoutEnv = process.env.CONTROL_VERIFY_TIMEOUT_MS;
+  if (timeoutEnv !== undefined && !/^[1-9]\d*$/.test(timeoutEnv)) {
+    const error = `CONTROL_VERIFY_TIMEOUT_MS must be a positive number of milliseconds, got "${timeoutEnv}"`;
+    report(false, { error }, `FAIL ${error}`);
+  }
+  const timeoutMs = Number(timeoutEnv ?? 600000);
   let scripts = {};
   try {
     scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
@@ -118,10 +156,11 @@ function verify() {
   if (names.length === 0) {
     report(false, { error: "no typecheck, lint, test or verify script" }, "FAIL no typecheck, lint, test or verify script in package.json  ->  add at least one, then re-run verify");
   }
-  const steps = names.map((step) => ({ step, ...run("npm", ["run", step, "--silent"]) }));
+  const steps = [];
+  for (const step of names) steps.push({ step, ...(await runStep("npm", ["run", step, "--silent"], timeoutMs)) });
   const ok = steps.every((s) => s.ok);
   const text = steps
-    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} (${s.ms}ms)${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
+    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} ${s.timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : `(${s.ms}ms)`}${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
     .join("\n");
   report(ok, { steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
 }
@@ -255,7 +294,7 @@ async function screenshot(lineArgs) {
 // eslint-disable-next-line no-unused-vars -- `rest` is used by feature commands added below.
 const [command, ...rest] = args;
 if (command === "doctor") await doctor();
-else if (command === "verify") verify();
+else if (command === "verify") await verify();
 else if (command === "screenshot") await screenshot(rest);
 else {
   process.stdout.write(`${HELP}\n`);

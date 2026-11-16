@@ -300,3 +300,29 @@ describe("screenshot", { concurrency: true }, () => {
     assert.equal(gone(pid), true);
   });
 });
+
+describe("verify: step timeout", () => {
+  function verifyIn(env) {
+    const dir = mkdtempSync(join(tmpdir(), "control-verify-"));
+    mkdirSync(join(dir, "scripts"));
+    copyFileSync(template, join(dir, "scripts", "control.mjs"));
+    const marker = `control-verify-hang-${process.pid}-${Date.now()}`;
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: `node -e "setInterval(()=>{},1000)" ${marker}` } }));
+    const start = Date.now();
+    const r = spawnSync("node", ["scripts/control.mjs", "verify"], { cwd: dir, encoding: "utf8", env: { ...process.env, ...env } });
+    return { r, ms: Date.now() - start, marker };
+  }
+
+  it("cuts a step that never ends, kills its whole process group", () => {
+    const { r, ms, marker } = verifyIn({ CONTROL_VERIFY_TIMEOUT_MS: "1500" });
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /FAIL test timed out after/);
+    assert.ok(ms < 8000, `took ${ms}ms`);
+    assert.notEqual(spawnSync("pgrep", ["-f", marker]).status, 0, "a hung process is still running");
+  });
+  it("rejects a non-numeric CONTROL_VERIFY_TIMEOUT_MS", () => {
+    const { r } = verifyIn({ CONTROL_VERIFY_TIMEOUT_MS: "abc" });
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /CONTROL_VERIFY_TIMEOUT_MS/);
+  });
+});
