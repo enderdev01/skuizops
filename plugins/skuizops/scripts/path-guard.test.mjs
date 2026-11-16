@@ -271,3 +271,18 @@ describe("cherry is read-only on the project", () => {
       assert.equal(bash("skuizops:cherry", "node scripts/control.mjs verify 2>&1 | tail -40").status, 0));
   });
 });
+
+describe("mango edits with Edit or Write", () => {
+  const run = (c, toolEditsOnly = true, p = project) => commandViolation(c, { project: p, cwd: p, env, toolEditsOnly });
+  for (const c of ["cd /Users/ada/DEV/app-worktrees/x && python3 - <<'E'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('a','b'))\nE",
+    "cat >> src/storm.ts <<'EOF'\nexport const x = 1\nEOF", "echo x > src/a.ts", "echo x > /Users/ada/DEV/app-worktrees/x/src/a.ts",
+    "sed -i '' s/a/b/ src/a.ts", "perl -pi -e s/a/b/ src/a.ts", "printf x | tee src/a.ts", `node -e "require('fs').writeFileSync('src/a.ts','x')"`]) {
+    it(`blocks ${c}`, () => assert.match(run(c), /mango edits files with Edit or Write/));
+  }
+  for (const c of ["npm test", "node scripts/control.mjs verify > /tmp/v.log 2>&1", "cat > /tmp/u.sh <<'EOF'\necho hi\nEOF", "python3 - <<'EOF'\nimport json\nprint(1)\nEOF",
+    "rm src/old.ts", "mkdir -p src/new", "git add -A && git commit -m x", "npm run build > /dev/null", "echo x > $S/out.txt", 'git worktree add "$(mktemp -d)" HEAD']) {
+    it(`allows ${c}`, () => assert.equal(run(c), null));
+  }
+  it("is off unless toolEditsOnly", () => assert.equal(run("echo x > src/a.ts", false), null));
+  it("is off outside the scope roots", () => assert.equal(run("echo x > src/a.ts", true, "/opt/app"), null));
+});

@@ -56,6 +56,9 @@ const GIT_MUTATES = ["stash", "checkout", "switch", "restore", "reset", "clean",
 const REF_WRITE_OPTS = { tag: /^-[a-zA-Z]*[dfasumF]|^--(delete|force|annotate|sign|local-user|message|file)/, branch: /^-[a-zA-Z]*[dDfmMcCu]|^--(delete|force|move|copy|set-upstream-to|unset-upstream)/ };
 const REF_LIST_OPTS = /^(-l|--list|--contains|--points-at|--merged|--no-merged|--show-current|--verify)$/;
 const CHERRY_MSG = 'cherry is read-only on the project: reproduce or mutate in a copy (git worktree add "$(mktemp -d)" or cp -R into a mktemp dir), never the live tree.';
+const MANGO_MSG = "mango edits files with Edit or Write, not through Bash (redirects, heredocs, tee, sed -i, perl -i, inline python/node writes): a scripted replace that misses its text fails silently. Bash may write only under the temp dir.";
+const INLINE_CODE = /\b(python3?|node|perl|ruby|bun|deno)\b[^\n;&|]*(\s-\w*[ce]\b|\s--eval\b|\s-(\s|$)|<<)/;
+const FILE_WRITE_API = /(?<!stdout|stderr)\.write\(|write_(text|bytes)\(|(write|append)FileSync|createWriteStream|open\([^)]*,\s*['"][wax]/;
 const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "rg", "diff"];
 // The list itself, its directory, or the script the human-only /skuizops:trust command runs.
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*skuizops|\btrust\.mjs\b/i;
@@ -221,8 +224,12 @@ function writtenWords(words) {
 // Best effort: a shell command that writes to a path editViolation protects, or mentions the trust list
 // without being read-only. Interpreters, variables and indirection can still write.
 // readOnly (cherry): nothing under the project changes and git does not touch the tree or refs.
-export function commandViolation(command, { project, cwd, env = process.env, readOnly = false } = {}) {
+// toolEditsOnly (mango): file contents change through Edit/Write; Bash writes only under the temp dir.
+export function commandViolation(command, { project, cwd, env = process.env, readOnly = false, toolEditsOnly = false } = {}) {
   readOnly = readOnly && inScope(project, env);
+  toolEditsOnly = toolEditsOnly && inScope(project, env);
+  // shortcut: code inside an interpreter cannot be resolved to a path, so any inline write API is blocked whatever its target; upgrade if mango needs scripted temp files.
+  const inlineWrite = toolEditsOnly && INLINE_CODE.test(command) && FILE_WRITE_API.test(command);
   const flat = hideQuotedRedirects(stripHeredocs(command))
     .replace(/\d*>&(\d+|-)(?![^\s;&|)<>])/g, " ") // `2>&1`, `>&-`: fd duplication, not a file
     .replace(/&>>?|>[|&]/g, ">"); // `&>`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
@@ -249,7 +256,8 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
     const git = gitCall(words);
     const base = git ? git.dirs.reduce((dir, d) => dirOf(d, dir), here) : here;
     // cherry may drop its own mktemp copies: a worktree under the temp dir (or behind a $VAR, see unknownVar) holds no one's work.
-    const tempCopy = (w) => !!w && (unknownVar(w) || [env.TMPDIR ?? tmpdir(), "/tmp"].some((t) => under(fold(real(dirOf(w, base))), fold(real(t)))));
+    const inTemp = (path) => [env.TMPDIR ?? tmpdir(), "/tmp"].some((t) => under(fold(real(path)), fold(real(t))));
+    const tempCopy = (w) => !!w && (unknownVar(w) || inTemp(dirOf(w, base)));
     if (readOnly && git?.sub === "worktree" && git.rest[0] === "remove" && tempCopy(git.rest.slice(1).find((a) => !a.startsWith("-")))) continue;
     if (readOnly && git && under(fold(base), fold(project)) && gitMutates(git)) return CHERRY_MSG;
     for (const [word, from] of [...redirects.map((w) => [w, here]), ...writtenWords(words).map((w) => [w, base])]) {
@@ -260,15 +268,23 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
         if (problem) return problem;
       }
     }
+    if (toolEditsOnly) {
+      const name = basename(commandWords(words)[0] ?? "");
+      for (const word of [...redirects, ...(["tee", "sed", "perl"].includes(name) ? writtenWords(words) : [])]) {
+        // shortcut: a leading unknown $VAR is assumed to be a temp dir, upgrade if mango abuses it.
+        if (!unquote(word) || unknownVar(word)) continue;
+        if (clean(word, here).some((path) => !inTemp(path) && !under(fold(path), "/dev"))) return MANGO_MSG;
+      }
+    }
   }
-  return null;
+  return inlineWrite ? MANGO_MSG : null;
 }
 
 if (isMain(import.meta.url)) {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   const bash = process.argv[2] === "bash";
   const problem = bash
-    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: input.agent_type?.split(":").pop() === "cherry" })
+    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: input.agent_type?.split(":").pop() === "cherry", toolEditsOnly: input.agent_type?.split(":").pop() === "mango" })
     : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, projectDir(input));
   if (problem) {
     process.stderr.write(`skuizops: ${problem}\n`);
