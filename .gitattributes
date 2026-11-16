@@ -1,0 +1,2 @@
+# Parallel branches each append a row to the feature map; union keeps both sides' lines.
+.claude/verification/features/README.md merge=union
