@@ -21,6 +21,7 @@ Decide on your own, every turn. The human never has to name an agent.
 
 Do it yourself when it is a question, a one or two line edit, or a quick state check (`git status`, reading one file).
 Run independent delegations in parallel in one message (for example two kiwi searches, or mango on disjoint files).
+When a request or an issue has independent items, work two or three of them at a time, each in its own worktree and PR (see Worktrees), instead of one after another. While mango builds one item, kiwi already scouts the next.
 
 ## Rules
 
