@@ -209,3 +209,120 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
     it("returns the -C path unnormalized (symlinks)", () => assert.equal(targetDir("git -C ../wt/lnk/.. commit -m x"), "../wt/lnk/.."));
   });
 });
+
+// Issue #61: the target dir is read per git invocation. Text that mentions git stays inspected (blocked on purpose).
+describe("checkCommand: dir per git", () => {
+  const WT = "/Users/ada/DEV/app-worktrees/x";
+  const MAIN = "/Users/ada/DEV/app";
+  const TMP = "/tmp/t";
+  const at = (d) => ({ [WT]: "fix/x", [MAIN]: "develop", [TMP]: "fix/t" })[d] ?? null;
+  const run = (cmd) => checkCommand(cmd, "develop", at);
+  const allowed = [
+    `git fetch -q && git -C ${WT} merge -q origin/develop`,
+    `cd ${WT} && git add -A && git commit -m x`,
+    `git -C ${WT} merge feat/b -m merge; echo "exit=$?"`,
+    `git -C ${WT} commit -m x && echo done`,
+    `git -C ${TMP} -c user.name=t commit -m x`,
+  ];
+  for (const cmd of allowed) it(`allows ${JSON.stringify(cmd)}`, () => assert.equal(run(cmd), null));
+  const blocked = [
+    "git commit -m x",
+    // text that mentions git is inspected like a command (flipped from allow: no text-as-data)
+    "cat > /tmp/x.md <<'EOF'\nthen run git commit later\nEOF",
+    'echo "remember to git commit"',
+    'grep -n "git commit" README.md',
+    "bash -c 'git commit -m x'",
+    'sh -c "git commit"',
+    'eval "git commit -m x"',
+    'echo "git commit -m x" | sh',
+    "echo 'git commit' | bash",
+    "printf 'git commit' | xargs -I{} sh -c {}",
+    "$(echo git commit -m x)",
+    "`echo git commit`",
+    "cat <<EOF\n$(git commit -m x)\nEOF",
+    "bash <<'EOF'\ngit commit -m x\nEOF",
+    "cat <<'EOF' | sh\ngit commit -m x\nEOF",
+    "cat > /tmp/x.sh <<'EOF'\ngit commit -m x\nEOF\nbash /tmp/x.sh",
+    `git -C ${WT} status && git commit -m x`,
+    `cd ${WT}; git commit -m x`,
+    // no variable resolution: any $ in -C, or a leading VAR=x statement, is judged by the session branch
+    `W=${WT}; git -C $W commit -m x`,
+    `W=${WT} && git -C "$W" commit -m x`,
+    `W=${WT}; git -C \${W} merge origin/develop`,
+    `W=${WT}; git -C ${WT} merge -q origin/develop`,
+    `_=${WT}; git -C "$_" commit -m x`,
+    `_=${WT} && git -C "$_" commit -m x`,
+    `_=${WT}; git -C "\${_}" commit -m x`,
+    `_=${WT}; git -C "$_" merge x`,
+    `_=${WT}; git -C "$_" push origin main`,
+    `1=${WT}; git -C "$1" commit -m x`,
+    `W=${WT}; X=$[W=1]; git -C $W commit -m x`,
+    `IFS=.; W=${MAIN}.--no-pager; git -C $W commit -m x`,
+    `GIT_DIR=${MAIN}/.git; git -C ${WT} commit -m x`,
+    `W=${MAIN}; git -C $W commit -m x`,
+    "W=$(pwd); git -C $W commit -m x",
+    `W=${WT}; W=${MAIN}; git -C $W commit -m x`,
+    `git fetch && git -C ${MAIN} merge origin/x`,
+    `git -C ${WT} status; git commit -m x`,
+    `git -C ${WT} merge x; cd ${MAIN} && git commit -m y`,
+    `git -C ${WT} merge x; sh -c "a; git commit -m y"`,
+    `git -C ${TMP} -c core.worktree=${MAIN} commit -m x`,
+    `git -C ${TMP} -c alias.commit=push commit -m x`,
+    "printf '%s\\n' 'git push origin main'", // printf is not a data command any more (printf -v)
+  ];
+  for (const cmd of blocked) it(`blocks ${JSON.stringify(cmd)}`, () => assert.match(run(cmd), /blocked/));
+  it("hints when a -C or cd could not be honored", () => {
+    assert.match(run(`cd ${WT}; git commit -m x`), /target dir could not be read/);
+    assert.match(run("W=$(pwd); git -C $W commit -m x"), /target dir could not be read/);
+    assert.doesNotMatch(run("git commit -m x"), /target dir/);
+    assert.doesNotMatch(run(`git -C ${MAIN} commit -m x`), /target dir/);
+  });
+});
+
+// Found by cherry: every shape below makes a commit/merge/push on a protected branch.
+describe("adversarial: text that reaches a shell", () => {
+  const WT = "/Users/ada/DEV/app-worktrees/x";
+  const FEAT = "/Users/ada/DEV/app-feat";
+  const MAIN = "/Users/ada/DEV/app";
+  const at = (d) => ({ [WT]: "fix/x", [FEAT]: "fix/y", [MAIN]: "develop" })[d] ?? null;
+  const C = "git commit -m x";
+  const cases = [
+    `echo "${C}" | sh`,
+    `echo $'\\'' ' '; ${C}; '' #'`,
+    `printf -v c "${C}"; $c`,
+    `printf -v c "${C}"; \${=c}`,
+    `echo "${C}" | sh>/dev/null`,
+    `echo "${C}" | "sh"`,
+    `echo "${C}" | \\sh`,
+    `echo "${C}" | $SHELL`,
+    `echo "${C}" | tcsh`,
+    `echo "${C}" | awk '{system($0)}'`,
+    `echo "${C}" > /tmp/a; sh</tmp/a`,
+    `cat <<'EOF' > >(tcsh)\n${C}\nEOF`,
+    `echo "git push origin main" | "sh"`,
+    `printf '%s\\n' "git merge feat/x" | $SHELL`,
+    `echo "${C}" | $'sh'`,
+    `echo "${C}" > /tmp/a; ./x.sh`,
+    `echo "${C}" | node -e 'x'`,
+    `W=${MAIN}p; Wp=${WT}; git -C \${W}p commit -m x`,
+    `W=${MAIN}p; Wp=${WT}; git -C "$W"p commit -m x`,
+    `W=${MAIN}; git -C $W/sub commit -m x`,
+    // round 2: words glued from quotes or variables, and git/gh running data
+    "$'git' commit -m x",
+    "$'git' push origin main",
+    "x=1 $'git' commit -m x",
+    '$"git" commit -m x',
+    'c="git commit -m x"; eval $c',
+    'declare c="git commit -m x"; eval "$c"',
+    'export c="git commit -m x"; sh -c "$c"',
+    `env c="git commit -m x" sh -c '$c'`,
+    'env -S"git commit -m x"',
+    'c="git commit -m x"; $c',
+    `echo "git commit -m x" | git -c alias.zz='!sh' zz`,
+    "cat <<'EOF' | git -c alias.zz=!sh zz\ngit commit -m x\nEOF",
+    `echo "git commit -m x" > /tmp/s.sh; git -c alias.zz='!sh /tmp/s.sh' zz`,
+    "gh alias set --shell zz - <<'EOF'\ngit commit -m x\nEOF\ngh zz",
+    'echo "git commit -m x" | gh alias set --shell zz - && gh zz',
+  ];
+  for (const cmd of cases) it(`blocks ${JSON.stringify(cmd)}`, () => assert.match(checkCommand(cmd, "develop", at), /blocked/));
+});

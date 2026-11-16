@@ -237,7 +237,15 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const text = takeSubstitutions(flat, inner);
   const segments = [text, ...inner].join("\n").split(/\n|;|&|\||\(|\)|`/);
   // The shell drops quotes and backslashes, so `tru"st".mjs` is trust.mjs: match with them removed.
-  const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
+  // `cd` only moves; `sed -n` with a plain print script (no -i, w, e, -f) reads.
+  const reads = (s) => {
+    const w = s.trim().split(/\s+/).map(unquote);
+    if (READ_ONLY.includes(w[0]) || w[0] === "cd") return true;
+    const args = w.slice(1);
+    const script = args.find((a) => !a.startsWith("-"));
+    return w[0] === "sed" && args.includes("-n") && !args.some((a) => /^-[a-zA-Z]*[ifes]|^--/.test(a) && a !== "-n") && /^([\d,$]+|\/[^/\\]*\/)[p=]?$/.test(script ?? "");
+  };
+  const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || reads(s));
   if (MENTIONS_TRUST_LIST.test(unquote(command)) && !onlyReads) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /skuizops:install-hooks.";
   let here = cwd ?? process.cwd();
@@ -283,8 +291,9 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
 if (isMain(import.meta.url)) {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   const bash = process.argv[2] === "bash";
+  const agent = String(input.agent_type ?? "").split(":").pop();
   const problem = bash
-    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: input.agent_type?.split(":").pop() === "cherry", toolEditsOnly: input.agent_type?.split(":").pop() === "mango" })
+    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: agent === "cherry", toolEditsOnly: agent === "mango" })
     : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, projectDir(input));
   if (problem) {
     process.stderr.write(`skuizops: ${problem}\n`);

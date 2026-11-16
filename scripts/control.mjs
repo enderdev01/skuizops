@@ -109,6 +109,7 @@ const BENCH_CASES = [
   ["branch-guard.mjs", "claude", bash("git push origin main"), true],
   ["branch-guard.mjs", "claude", bash('git commit --no-verify -m "skip hooks"'), true],
   ["branch-guard.mjs", "claude", bash("git config core.hooksPath /dev/null"), true],
+  ["branch-guard.mjs", "claude", bash("bash -c 'git commit -m x'"), true],
   ["branch-guard.mjs", "claude", bash("git status"), false],
   ["branch-guard.mjs", "claude", bash("npm test"), false],
   ["path-guard.mjs", "bash", bash("rm -rf .githooks"), true],

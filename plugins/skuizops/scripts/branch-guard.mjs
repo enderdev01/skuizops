@@ -79,7 +79,6 @@ export function targetDir(command) {
     }
     return ws[0]?.includes("\u0001") ?? false;
   };
-  const home = (d) => (d.startsWith("~/") ? homedir() + d.slice(1) : d);
   const gitC = parts.map((p) => /^git\s+-C\s+(\S+)(\s.*)?$/.exec(p));
   if (gitC.every((m) => m && PATH_RE.test(m[1]) && m[1] === gitC[0][1] && !badOptions(words(m[2] ?? "").filter(Boolean)))) {
     return home(gitC[0][1]); // raw: `git -C` follows symlinks physically, so `..` must not be folded here
@@ -89,6 +88,44 @@ export function targetDir(command) {
   const ok = parts.slice(1).every((p) => /^git(\s|$)/.test(p) && !words(p).some((w) => DIR_OPTION.test(w)) && !badOptions(words(p).slice(1)));
   return ok ? normalize(home(cd[1])) : null;
 }
+
+const home = (d) => (d.startsWith("~/") ? homedir() + d.slice(1) : d);
+// Only config that cannot move the work tree, alias a command or run code is honored among the leading options.
+const SAFE_CONFIG = /^(user\.(name|email)|commit\.gpgsign)=[\w.@+-]*$/;
+
+// Directory of each git invocation of a chain of `git ...` statements joined by `&&` or `;`
+// (null entry = the session cwd), or null when the shape is not understood (= the session branch for all).
+// A git uses its own single `-C <literal path>`; a `$` in the path, or any statement that is not git before
+// the first git (`VAR=x; ...`, `cd`), is not understood. Statements after the last git are not read: the caller
+// checks that they hold no git.
+function chainDirs(command) {
+  const stripped = command.replace(GH_DATA, (m, tag, body) => (tag && body.split("\n").includes(tag) ? m : "\u0001"));
+  const stmts = stripped.replace(SAFE_TAIL, "").split(/&&|;/).map((s) => s.trim());
+  const dirs = [];
+  for (const s of stmts) {
+    if (!/^git\s/.test(s)) return dirs.length ? dirs : null; // first other command: the rest is the (checked) tail
+    if (/[`\\\n|<>(){}#!"']/.test(s) || /&/.test(s)) return null;
+    const ws = s.split(/\s+/);
+    let i = 1;
+    let dir = null;
+    while (ws[i]?.startsWith("-")) {
+      if (ws[i] === "-C") {
+        if (dir !== null || ws[i + 1] === undefined) return null;
+        dir = ws[i + 1];
+        if (!PATH_RE.test(dir)) return null;
+        i += 2;
+      } else if (ws[i] === "-c" && SAFE_CONFIG.test(ws[i + 1] ?? "")) i += 2;
+      else if (DIR_OPTION.test(ws[i])) return null;
+      else i += GIT_OPTIONS_WITH_VALUE.includes(ws[i]) ? 2 : 1;
+    }
+    if (ws.slice(1, i + 1).some((w) => w.includes("\u0001"))) return null; // quoted text among the options or as the subcommand
+    if (ws.some((w) => w.includes("$"))) return null;
+    dirs.push(dir === null ? null : home(dir)); // raw like targetDir: `git -C` follows symlinks physically
+  }
+  return dirs;
+}
+
+const HINT = " (the target dir could not be read from this command: pass the literal path, as in git -C <path> … or cd <path> && git …)";
 
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
 export function checkCommand(command, currentBranch, branchAt = () => null) {
@@ -104,17 +141,27 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
   if (isPlainGhCall(command)) return null;
 
   // Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
-  // each segment is inspected. The target dir is honored only for `cd <path> && git ...` or a single
-  // `git -C <path> ...`; anything else is judged by the session branch.
+  // each segment is inspected; text that mentions git is inspected too, so it can never make the chain look trusted.
+  // The target dir is per git: `cd <path> && git ...` / `git -C <path> ...` (targetDir, whole command) or
+  // each git of a chain (chainDirs); anything else is judged by the session branch.
   // Redirections are removed first: `2>&1` and `> file` are not refspecs.
-  const branch = () => {
-    const dir = targetDir(command);
-    return dir === null ? currentBranch : branchAt(dir);
-  };
-  for (const segment of command.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/)) {
+  // Dropping quotes splits `-C "$W"p commit` into `-C $W p commit` (subcommand `p`), hiding the commit: refuse the shape.
+  if (/\s-C\s+(?:"[^"]*"|'[^']*')[^\s;&|)]/.test(command)) return "git blocked: -C <quoted path> followed by more text in the same word is not understood: write the path as one word, git -C <path> …";
+  const segments = command.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/);
+  const whole = targetDir(command);
+  let chain = whole === null ? chainDirs(command) : null;
+  // The chain is trusted only when it lists exactly the gits found here, else a git it did not see could hide.
+  if (chain && chain.length !== segments.filter((s) => s.trim().split(/\s+/).some((w) => w === "git" || w.endsWith("/git"))).length) chain = null;
+  const honored = whole !== null || chain !== null;
+  let nth = -1;
+  for (const segment of segments) {
     const words = segment.trim().split(/\s+/);
     const gitAt = words.findIndex((w) => w === "git" || w.endsWith("/git"));
     if (gitAt === -1) continue;
+    nth++;
+    const dir = whole ?? chain?.[nth] ?? null;
+    const branch = () => (dir === null ? currentBranch : branchAt(dir));
+    const hint = !honored && /(^|[\s;&|(])(cd|-C)\s/.test(command) ? HINT : "";
     // These decide which hooks, config and git binary run. GIT_EDITOR, GIT_PAGER and the like are fine.
     if (words.slice(0, gitAt).some((w) => /^(HOME|PATH|GIT_DIR|GIT_EXEC_PATH|GIT_CONFIG\w*)=/.test(w))) {
       return "Setting HOME, PATH, GIT_DIR, GIT_EXEC_PATH or GIT_CONFIG* for a git command is forbidden: it changes which hooks and config git uses.";
@@ -127,7 +174,7 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
     }
     if (["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset"].includes(sub)) {
       const problem = commitViolation(branch());
-      if (problem) return `git ${sub} blocked: ${problem}`;
+      if (problem) return `git ${sub} blocked: ${problem}${hint}`;
     }
     // Plumbing and forced branch moves change a ref without running any hook.
     if (sub === "update-ref" || sub === "commit-tree") return `git ${sub} is forbidden: it moves refs without running the git hooks.`;
@@ -146,7 +193,7 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
       const targets = refspecs.length ? refspecs.map((r) => r.replace(/^\+/, "").split(":").pop()) : [branch() ?? ""];
       for (const target of targets) {
         const problem = pushViolation(target === "HEAD" ? (branch() ?? "") : target);
-        if (problem) return `git push blocked: ${problem}`;
+        if (problem) return `git push blocked: ${problem}${hint}`;
       }
     }
   }

@@ -272,6 +272,24 @@ describe("cherry is read-only on the project", () => {
   });
 });
 
+describe("read-only commands that mention the install script", () => {
+  const run = (c) => commandViolation(c, { project, cwd: project, env });
+  const f = "plugins/skuizops/scripts/install-hooks.mjs";
+  for (const c of [`cd /x && grep -n guard ${f}`, `cd /x && sed -n 1,5p ${f}`]) it(`allows ${c}`, () => assert.equal(run(c), null));
+  for (const c of [`sed -i s/a/b/ ${f}`, "cd /x && echo y > plugins/skuizops/scripts/trust.mjs", `sed -n w/tmp/o ${f}`, `sed -ni 1p ${f}`]) {
+    it(`blocks ${c}`, () => assert.ok(run(c)));
+  }
+  it("a non-string agent_type does not crash the hook", () => {
+    const r = spawnSync("node", [fileURLToPath(new URL("./path-guard.mjs", import.meta.url)), "bash"], {
+      input: JSON.stringify({ agent_type: 42, cwd: project, tool_input: { command: "git status" } }),
+      env: { ...process.env, HOME: "/Users/ada", CLAUDE_PROJECT_DIR: project },
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 0);
+    assert.equal(r.stderr, "");
+  });
+});
+
 describe("mango edits with Edit or Write", () => {
   const run = (c, toolEditsOnly = true, p = project) => commandViolation(c, { project: p, cwd: p, env, toolEditsOnly });
   for (const c of ["cd /Users/ada/DEV/app-worktrees/x && python3 - <<'E'\np='src/a.ts'\ns=open(p).read()\nopen(p,'w').write(s.replace('a','b'))\nE",
