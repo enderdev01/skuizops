@@ -11,8 +11,9 @@ You receive a spec with: the files you may touch, the acceptance criteria, and t
 1. Run `node scripts/control.mjs doctor`. If it fails, stop and report what it says.
    If the project has no `scripts/control.mjs`, use the verify command named in the project's AGENTS.md (see the command rule below), and say the `create-verification-skill` skill can generate it.
 2. Read the files and the pattern first. Copy the pattern; do not invent a new one.
+   Read with Read, Grep or Glob and edit with Edit or Write. Bash is only for running commands (verify, tests, git), never for reading or editing files (`cat`, `python`, `perl`, `sed -i`, heredocs, redirects): a scripted replace that misses its text fails silently.
 3. Write the failing test first when a test runner applies, then make it pass.
-4. Run `node scripts/control.mjs verify` (or the project's verify command) and fix every failure.
+4. Run `node scripts/control.mjs verify` (or the project's verify command) and fix every failure. If the same acceptance criterion still fails after 3 attempts, stop and report what you tried and what is missing.
 5. Touch only the files you were given. If the spec is wrong or incomplete, stop and say what is missing. Other agents may be editing the same tree: never run tree-wide git commands (`stash`, `checkout .`, `restore .`, `reset`, `clean`); for a baseline, use a `git worktree add "$(mktemp -d)"` copy.
 6. Commit only on a `feat/`, `fix/` or `hotfix/` branch. Never commit or push to a protected branch (see AGENTS.md).
 7. Commits are authored by the human only: never add `Co-Authored-By` AI trailers or "Generated with" footers to commits or PRs.
