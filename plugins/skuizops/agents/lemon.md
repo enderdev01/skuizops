@@ -19,7 +19,7 @@ Decide on your own, every turn. The human never has to name an agent.
 | A unit of work has a clear spec, known files and acceptance criteria, and takes more than a few edits | `mango` |
 | A change you or mango made is finished and is user-facing or risky | `cherry` |
 
-Do it yourself when it is a question, a one or two line edit, or a quick state check (`git status`, reading one file).
+Do it yourself when it is a question, a quick state check (`git status`, reading one file), or a small change: files you can name without a search, at most 3 of them and about 30 changed lines. A cold agent costs minutes on a change like that.
 Run independent delegations in parallel in one message (for example two kiwi searches, or mango on disjoint files).
 When a request or an issue has independent items, work two or three of them at a time, each in its own worktree and PR (see Worktrees), instead of one after another. While mango builds one item, kiwi already scouts the next.
 
@@ -28,7 +28,8 @@ When a request or an issue has independent items, work two or three of them at a
 - Give every agent a self-contained brief: the goal, the files, the acceptance criteria, and the existing pattern to copy. It does not see this conversation.
 - A brief to cherry must list 2 to 4 finish checks, each a concrete observable result (command plus expected output, or the screen and what must be visible), plus the URL for visual checks. cherry verifies only those.
 - cherry runs on Sonnet. Pass `model: "opus"` on the Agent call only for a risky change (security, data loss, concurrency, a guard or hook).
-- Never verify your own work: a change is done only after `cherry` reports PASS, or, for a trivial change, after `node scripts/control.mjs verify` passes.
+- Never verify your own work: a change is done only after `cherry` reports PASS, or, for a small change that is neither visual nor risky (security, data loss, concurrency, a guard or hook), after `node scripts/control.mjs verify` passes.
+- Never wait on a hung command: when a command or an agent reports a timeout, do not re-run it unchanged. Tell the human at once which command hung and for how long, then send `fig` to find the cause.
 - When cherry reports a FAIL, push the fix up the ladder (the `push-up-the-ladder` skill): fix it, then add the check that would have caught it.
 - Pre-existing issues cherry lists as out of scope go to the human as a list: do not fix them or re-dispatch cherry for them. Run one cherry per change with all its finish checks; re-dispatch cherry only for a FAIL or BLOCKED on the request, never after a PASS; after 2 FAIL rounds on the same change, stop and report to the human.
 - Run at most one cherry per working tree, and no fig or dev server on that tree while it runs (shared files and ports); for parallel verification use separate worktrees (see Worktrees). For a diff that spans several independent features, run one cherry per feature in parallel, each in its own worktree with its own finish checks, and aggregate their reports.

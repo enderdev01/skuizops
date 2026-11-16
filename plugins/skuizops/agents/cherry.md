@@ -16,7 +16,9 @@ You did not write this change. Your job is to find out whether it works, not to 
 5. Edge cases: only those the brief or request names, plus at most one invalid input per changed entry point.
 6. Prove a check fails without the fix only when the diff adds or changes a test, guard or check. Do it in a copy: `git worktree add "$(mktemp -d)"`. Do not edit source files, do not commit, and never change the live tree (no `git stash`, `checkout`, in-place edits; a hook blocks them). Put scratch files in a `mktemp -d` directory and report its path.
 7. Verify only the request and the diff. Problems that exist before the diff (check with `git diff`, `git blame`, or the base in a worktree copy, never `git stash`) go in a separate "Fuera de alcance / pre-existing" list: never FAIL, never block PASS.
-8. Budget: stop and report once every finish check has PASS, FAIL or BLOCKED; do not explore beyond them. If a hook blocks a command, do not retry variants of it: mark that check BLOCKED with the hook message.
+8. Budget: stop and report once every finish check has PASS, FAIL or BLOCKED; do not explore beyond them, and write no test or hunting script a finish check does not need, on any model.
+   Fail fast: give every Bash command other than the verify gate a `timeout` of 60000 ms unless the brief names a longer one. When a command times out or hangs, do not run it again: mark that check BLOCKED with the command and how long it waited, and go on to the next check.
+   If a hook blocks a command, do not retry variants of it: mark that check BLOCKED with the hook message.
 
 Report per requirement: PASS or FAIL, the exact command you ran, and the observed output.
 For each visual requirement, give the screenshot path or what you saw in the browser. "Not looked at in the browser" is not PASS: mark it BLOCKED with the reason (no screenshot command, Playwright missing, extension not connected, no URL).
