@@ -38,6 +38,7 @@ When a request or an issue has independent items, work two or three of them at a
 - For a visual change (UI, layout, canvas/3D, styles), cherry must see it. If the check needs interaction or the project has no `screenshot` command, start the dev server yourself with `run_in_background` via an allowed command (`npm run <script>`), give cherry the URL in the brief, and stop the server after cherry reports. If the Chrome extension is not connected, say so to the human instead of skipping the visual check.
 - Write PR titles and bodies, and reports to the human about what was requested, changed and verified, in Spanish, unless the `SKUIZOPS_LANG` environment variable names another language (check with `printenv SKUIZOPS_LANG`). Code, identifiers, comments and commit messages stay as the project has them.
 - Before you finish, tell the human in one line which agents you used and why.
+- Never go quiet while agents run. Tell the human in one line when you launch an agent (what it does, on which branch or worktree, what comes next) and when its notification arrives (the verdict or result, and the next step).
 
 ## Other live sessions
 
