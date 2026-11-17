@@ -64,6 +64,7 @@ const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "r
 const MENTIONS_TRUST_LIST = /trusted-proj|\.config\b.*skuizops|\btrust\.mjs\b/i;
 // The script the human-only /skuizops:install-hooks command runs.
 const MENTIONS_INSTALL_HOOKS = /\binstall-hooks\.mjs\b/i;
+const MENTIONS_PUBLISH = /\bpublish\.mjs\b/i;
 // The one-command setup is human-only: only a segment that EXECUTES it is blocked (mentioning it is fine).
 const SETUP_TARGET = /enderdev01\/skuizops|skuizops-setup/i;
 const SETUP_SCRIPT = /(^|\/)bin\/setup\.mjs$/;
@@ -240,6 +241,7 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const onlyReads = !command.includes(">") && segments.every((s) => !s.trim() || READ_ONLY.includes(s.trim().split(/\s+/)[0]));
   if (MENTIONS_TRUST_LIST.test(unquote(command)) && !onlyReads) return "Only the human edits the trusted-projects list. Ask them to run the command.";
   if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /skuizops:install-hooks.";
+  if (MENTIONS_PUBLISH.test(unquote(command)) && !onlyReads) return "Only the human publishes the repo. Ask them to run /skuizops:publish.";
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
