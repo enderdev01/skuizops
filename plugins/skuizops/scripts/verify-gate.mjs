@@ -35,6 +35,19 @@ export function treeState(cwd) {
   return `dirty:${hash.digest("hex")}`;
 }
 
+// A change that can modify the check that judges it makes the check unreliable. shortcut: package.json "scripts" edits are not flagged, add if agents start rewiring them.
+const CHECK_FILES = /^(scripts\/control\.mjs$|scripts\/guard\/|\.claude\/verification\/|\.claude\/skills\/verify\/|\.githooks\/)|(^|\/)(vitest|jest)\.config\.[^/]+$/;
+
+// Paths changed since the default branch's merge-base (else since HEAD) plus untracked files that match the project's own checks.
+// [] on any git error: fail open.
+export function changedChecks(cwd) {
+  const base = ["origin/HEAD", "origin/main", "origin/develop"].map((ref) => git(cwd, "merge-base", "HEAD", ref)).find((r) => r.status === 0)?.stdout.trim() || "HEAD";
+  const diff = git(cwd, "diff", "--name-only", base);
+  const untracked = git(cwd, "ls-files", "--others", "--exclude-standard");
+  if (diff.status !== 0 || untracked.status !== 0) return [];
+  return [...new Set(`${diff.stdout}\n${untracked.stdout}`.split("\n").filter((p) => CHECK_FILES.test(p)))];
+}
+
 function main() {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
 
@@ -70,9 +83,14 @@ function main() {
     process.exit(0);
   }
 
+  const own = changedChecks(cwd);
+  const note = own.length ? `This change modifies its own checks (${own.join(", ")}): say so in the PR body and have the human review them.` : "";
+  const say = (text) => process.stdout.write(`${JSON.stringify({ systemMessage: text })}\n`);
+
   // The hook timeout is 300 s: stay below it so a hang is a failure we report, not a kill.
   const failure = verdict(spawnSync(command[0], command[1], { cwd, encoding: "utf8", timeout: 240000 }));
   if (failure === null) {
+    if (note) say(`skuizops: ${note}`);
     if (marker) {
       try {
         writeFileSync(marker, `${state}\n`);
@@ -83,11 +101,11 @@ function main() {
 
   // Already blocked once this turn: warn but let it stop, so we never block twice.
   if (input.stop_hook_active) {
-    process.stdout.write(`${JSON.stringify({ systemMessage: "skuizops: project verify is still failing." })}\n`);
+    say(`skuizops: project verify is still failing.${note && ` ${note}`}`);
     process.exit(0);
   }
   process.stderr.write(
-    `Project verify is failing. Fix it before you finish (delegate long logs to fig):\n${failure}`,
+    `Project verify is failing. Fix it before you finish (delegate long logs to fig):\n${failure}${note && `\n${note}`}`,
   );
   process.exit(2);
 }

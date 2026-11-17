@@ -60,6 +60,40 @@ describe("verdict", () => {
   });
 });
 
+describe("verify gate flags changes to its own checks", () => {
+  it("says so when scripts/control.mjs changed, without changing the result", () => {
+    const t = setup(true, { pass: true, git: true });
+    appendFileSync(join(t.project, "scripts", "control.mjs"), "// edit\n");
+    const r = t.run();
+    assert.equal(r.status, 0);
+    assert.match(JSON.parse(r.stdout).systemMessage, /modifies its own checks \(scripts\/control\.mjs\)/);
+    const failing = setup(true, { git: true });
+    appendFileSync(join(failing.project, "scripts", "control.mjs"), "// edit\n");
+    assert.equal(failing.run().status, 2);
+  });
+  it("says so for a committed change since the default branch", () => {
+    const t = setup(true, { pass: true, git: true });
+    t.sh("update-ref", "refs/remotes/origin/main", "HEAD");
+    mkdirSync(join(t.project, ".githooks"));
+    writeFileSync(join(t.project, ".githooks", "pre-push"), "x");
+    t.sh("add", "-A");
+    t.sh("commit", "-q", "-m", "hook");
+    assert.match(JSON.parse(t.run().stdout).systemMessage, /\.githooks\/pre-push/);
+  });
+  it("is silent for an ordinary change", () => {
+    const t = setup(true, { pass: true, git: true });
+    writeFileSync(join(t.project, "src.txt"), "x");
+    const r = t.run();
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, "");
+  });
+  it("is silent outside a git repo", () => {
+    const r = setup(true, { pass: true }).run();
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, "");
+  });
+});
+
 describe("verify gate flow", () => {
   it("failing verify blocks on a clean tree with no recorded commit", () => {
     const t = setup(true, { git: true });

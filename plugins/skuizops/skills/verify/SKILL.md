@@ -30,7 +30,7 @@ Green is required, not sufficient.
 
 ## 3. Exercise the behavior
 
-1. Find the feature in the project's feature map, `.claude/verification/features/README.md`.
+1. Find the feature in the project's feature map, `.claude/verification/features/README.md`: the rows whose `Triggers` globs match the changed paths (`git diff --name-only`).
 2. Use the `scripts/control.mjs` command listed there, with the request's example input.
 3. Try the edge cases the brief or request names, plus the ones listed in the feature's file next to the README when they touch the change.
 
@@ -52,6 +52,6 @@ For visual requirements the evidence is the screenshot path or what you observed
 
 ## Keeping this skill current
 
-- When you add or change a user-facing feature, add or update its file under `.claude/verification/features/` and its row in the README.
+- When you add or change a user-facing feature, add or update its file under `.claude/verification/features/` and its row in the README, including the row's `Triggers` globs.
 - When a feature needs a way to be exercised, add a subcommand to `scripts/control.mjs` instead of writing a throwaway script.
 - Run the `maintain-verification-skill` skill at least once a day: it removes features that no longer exist and fixes commands that no longer run.
