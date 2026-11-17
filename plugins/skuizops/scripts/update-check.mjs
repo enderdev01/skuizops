@@ -1,6 +1,7 @@
 // Update notice: tells the orchestrator when a newer skuizops is published than the installed one. Never blocks;
 // up to date, offline or any error prints nothing.
 //   node update-check.mjs    Claude Code SessionStart hook
+//   node update-check.mjs codex    Codex SessionStart hook: silent
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -67,6 +68,8 @@ export function run(installed, { home = homedir(), now = Date.now(), lookup = re
 }
 
 function main() {
+  // shortcut: no update check under Codex yet, add one when codex exposes installed plugin versions
+  if (process.argv[2] === "codex") return;
   try {
     const installed = readJson(new URL("../.claude-plugin/plugin.json", import.meta.url)).version;
     const text = run(installed);

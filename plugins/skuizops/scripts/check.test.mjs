@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -184,6 +184,20 @@ describe("check notice", () => {
     const out = realpathSync(mkdtempSync(join(tmpdir(), "check-out-")));
     const r = spawnSync("node", [script, "notice"], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: out }, input: "{}", encoding: "utf8" });
     assert.deepEqual([r.status, r.stdout], [0, ""]);
+  });
+
+  it("codex host skips the Claude-only checks but keeps trust", () => {
+    const s = sandbox();
+    rmSync(join(s.home, ".claude"), { recursive: true });
+    rmSync(join(s.project, ".claude", "settings.json"));
+    const rows = check({ project: s.project, home: s.home, env: s.env, host: "codex" });
+    assert.deepEqual(rows.filter((r) => r.status === "fail"), []);
+    assert.deepEqual(rows.filter((r) => ["plugin", "default agent"].includes(r.name)), []);
+    assert.equal(check({ project: s.project, home: s.home, env: s.env }).find((r) => r.name === "plugin").status, "fail");
+    const codex = (project) => spawnSync("node", [script, "notice", "codex"], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: project }, input: "{}", encoding: "utf8" });
+    assert.equal(codex(s.project).stdout, "");
+    rmSync(join(s.home, ".config"), { recursive: true, force: true });
+    assert.match(codex(s.project).stdout, /trusted project/);
   });
 
   it("is empty for rows without a failure", () => assert.equal(notice([{ status: "ok", name: "x" }, { status: "info", name: "y", text: "z" }]), ""));

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,33 @@ function run(command, source) {
   for (const name of ["branch-guard.mjs", "path-guard.mjs", "background-guard.mjs"]) writeFileSync(join(root, "scripts", name), source);
   return spawnSync("sh", ["-c", command], { input: "{}", env: { ...process.env, CLAUDE_PLUGIN_ROOT: root } }).status;
 }
+
+const readJson = (rel) => JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8"));
+const scriptsIn = (file) =>
+  [...new Set(Object.values(readJson(file).hooks).flat().flatMap((e) => e.hooks).map((h) => h.command.match(/scripts\/([\w-]+\.mjs)/)?.[1]).filter(Boolean))];
+
+describe("codex-hooks.json", () => {
+  const codex = scriptsIn("../hooks/codex-hooks.json");
+  // check-file.mjs reads tool_input.file_path, which an apply_patch payload lacks: no Codex entry yet.
+  it("references every guard script of hooks.json except agent-emoji and check-file", () => {
+    for (const name of scriptsIn("../hooks/hooks.json").filter((n) => !["agent-emoji.mjs", "check-file.mjs"].includes(n))) assert.ok(codex.includes(name), `${name} missing`);
+  });
+  it("references only scripts that exist", () => {
+    for (const name of [...codex, ...scriptsIn("../hooks/hooks.json")]) assert.ok(existsSync(new URL(`./${name}`, import.meta.url)), `${name} missing`);
+  });
+  it("guards apply_patch with the path guard", () => {
+    const entry = readJson("../hooks/codex-hooks.json").hooks.PreToolUse.find((e) => e.matcher === "apply_patch");
+    assert.ok(entry?.hooks.some((h) => h.command.includes("path-guard.mjs") && h.onFailure === "block"));
+  });
+});
+
+describe("manifests", () => {
+  it("the Claude and Codex manifests have the same name and version", () => {
+    const [a, b] = [readJson("../.claude-plugin/plugin.json"), readJson("../.codex-plugin/plugin.json")];
+    assert.equal(b.name, a.name);
+    assert.equal(b.version, a.version);
+  });
+});
 
 describe("PreToolUse hook commands", () => {
   it("covers the branch guard, the background guard and the path guard (Edit and Bash)", () => assert.equal(commands.length, 4));

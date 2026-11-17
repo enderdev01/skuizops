@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
+import { uninstallCodex } from "./codex.mjs";
 import { sources } from "../plugins/skuizops/scripts/install-hooks.mjs";
 import { real, trustFile } from "../plugins/skuizops/scripts/scope.mjs";
 
@@ -191,6 +192,7 @@ export const planLines = (project) => [
   `Project: remove "agent" (if skuizops:lemon) and "outputStyle" (if brief) from ${project}/.claude/settings.json, and the unedited .claude/output-styles/brief.md`,
   `User: remove extraKnownMarketplaces.${MARKETPLACE} from ~/.claude/settings.json`,
   `Claude: claude plugin uninstall ${PLUGIN}, then claude plugin marketplace remove ${MARKETPLACE} (each only if present)`,
+  `Codex (only if codex is installed): delete ~/.codex/agents/skuizops-*.toml, the skuizops:lemon block in ${project}/.codex/config.toml, codex plugin remove ${PLUGIN}, codex plugin marketplace remove ${MARKETPLACE}`,
   "Left alone: ponytail, engram, unslop, stageshow, Playwright, and your .claude/verification and scripts/control.mjs",
 ];
 
@@ -237,6 +239,7 @@ export async function uninstall({ step, out, MARK, dim }, { cwd = process.cwd(),
   track(await step("Marketplace setting", async () => asStep(removeMarketplaceEntry(home))));
   track(await step("Plugin", async () => asStep(await uninstallPlugin(exec))));
   track(await step("Marketplace", async () => asStep(await removeMarketplace(exec))));
+  track({ status: (await uninstallCodex({ step, out, MARK, dim }, { home, root: project, exec })) ? "fail" : "ok" });
   out("");
   if (others.length) {
     out("Other projects are still trusted. Run the uninstall in each to clean their files:");

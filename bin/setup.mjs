@@ -7,6 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
+import { setupCodex } from "./codex.mjs";
 import { check, format } from "../plugins/skuizops/scripts/check.mjs";
 import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
 import { isMain, isTrusted } from "../plugins/skuizops/scripts/scope.mjs";
@@ -384,6 +385,8 @@ async function main() {
     if (r.installed.length) env.configured.push(`installed the recommended skills ${r.installed.join(", ")}; they apply to NEW sessions`);
     return r;
   }));
+
+  track({ status: (await setupCodex({ step, out, MARK, dim }, { home: homedir(), root, exec: (cmd, args) => run(cmd, args, { maxBuffer: 1 << 24 }) })) ? "fail" : "ok" });
 
   // Reported but not tracked: a failed check tells the human what to fix, it is not an installer error.
   await step("Check", async () => {

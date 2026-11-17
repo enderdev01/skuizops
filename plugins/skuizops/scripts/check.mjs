@@ -1,6 +1,7 @@
 // Read-only check of a project's skuizops configuration. Never writes, creates or deletes a file.
 //   node check.mjs           print one row per check (ok / FAIL -> fix / info), exit 1 when any is FAIL (/skuizops:check)
 //   node check.mjs notice    SessionStart hook: one line only when a check FAILs; never fails the session
+//   a trailing `codex` argument (host) skips the Claude-only checks: plugin installed/enabled, default agent
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -101,15 +102,16 @@ function oldNames(project, home, { settings }, installed) {
 }
 
 // Returns one row per check: { status: "ok" | "fail" | "info", name, text }.
-export function check({ project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)) }) {
+// host "codex" skips the Claude-only rows (plugin installed/enabled, default agent).
+export function check({ project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)), host = "claude" }) {
   const { version } = readJson(join(pluginRoot, ".claude-plugin", "plugin.json")) ?? {};
   const config = projectSettings(project);
   const { hooks, guards, installedBy } = hookProblems(project);
   const installed = readJson(join(home, ".claude", "plugins", "installed_plugins.json"))?.plugins;
   const old = oldNames(project, home, config, installed);
+  const claudeOnly = host === "codex" ? [] : [pluginRow(home, project, version), agentRow(config, pluginRoot)];
   return [
-    pluginRow(home, project, version),
-    agentRow(config, pluginRoot),
+    ...claudeOnly,
     hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
     guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
     isTrusted(project, { ...env, HOME: home }) ? ok("trusted project") : fail("trusted project", "/skuizops:trust"),
@@ -131,7 +133,7 @@ function main() {
   try {
     const project = projectDir(quiet ? JSON.parse(readFileSync(0, "utf8") || "{}") : {});
     if (quiet && !inScope(project)) return;
-    const rows = check({ project });
+    const rows = check({ project, host: process.argv.includes("codex") ? "codex" : "claude" });
     if (quiet) {
       const text = notice(rows);
       if (text) process.stdout.write(`${text}\n`);
