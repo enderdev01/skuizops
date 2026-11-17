@@ -122,6 +122,10 @@ It is blocked, gets the reason and creates a `feat/` branch on its own.
 | `check-file` | The file just edited, with ESLint | A lint error the agent left behind |
 | `verify-gate` | The project's tests, on finish | Calling a task done with broken tests |
 
+### Publish the repo
+
+`/skuizops:publish` (human only, the model cannot invoke it) makes the GitHub repo public so that only collaborators can push or open pull requests. Without an argument it shows the plan and changes nothing; to apply it, type `/skuizops:publish owner/repo`. It stops if git tracks files that look like secrets. Anyone can still fork a public repo.
+
 Full detail on rules, scope and the trust model: [plugins/skuizops/README.md](plugins/skuizops/README.md).
 
 ## More detail

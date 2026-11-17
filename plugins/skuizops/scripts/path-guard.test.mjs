@@ -145,6 +145,22 @@ describe("commandViolation", () => {
   });
   it("allows reading install-hooks.mjs", () => assert.equal(check("cat /p/scripts/install-hooks.mjs"), null));
 
+  it("blocks running publish.mjs", () => {
+    for (const c of ["node plugins/skuizops/scripts/publish.mjs", 'node "$CLAUDE_PLUGIN_ROOT/scripts/publish.mjs" x/y']) {
+      assert.match(check(c), /\/skuizops:publish/, c);
+    }
+  });
+  // The entry point already prefixes "skuizops: ", so a message must not carry it again.
+  it("returns block messages without the skuizops: prefix", () => {
+    for (const c of ["node plugins/skuizops/scripts/publish.mjs", "node /p/scripts/install-hooks.mjs", `cat ${trust} > x`]) {
+      assert.doesNotMatch(check(c), /^skuizops:/, c);
+    }
+  });
+  it("allows testing and reading publish.mjs", () => {
+    assert.equal(check("node --test plugins/skuizops/scripts/publish.test.mjs"), null);
+    assert.equal(check("cat plugins/skuizops/scripts/publish.mjs"), null);
+  });
+
   it("blocks agents from running the one-command setup", () => {
     for (const c of ["node bin/setup.mjs", "npx github:enderdev01/skuizops", "npx skuizops-setup", 'node "./bin/set"up.mjs', "cd /tmp && npx github:enderdev01/skuizops", "FOO=1 node bin/setup.mjs", "pnpm dlx github:enderdev01/skuizops", 'bash -c "npx github:enderdev01/skuizops"', "sh -c 'node bin/setup.mjs'", 'zsh -lc "cd /tmp && npx github:enderdev01/skuizops"', 'eval "npx github:enderdev01/skuizops"', `bash -c "bash -c 'npx github:enderdev01/skuizops'"`, "/usr/bin/env node bin/setup.mjs", "bash bin/setup.mjs", "npm x github:enderdev01/skuizops", "npm --yes exec github:enderdev01/skuizops"]) {
       assert.match(check(c), /npx github:enderdev01\/skuizops/, c);

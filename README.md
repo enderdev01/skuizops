@@ -125,6 +125,10 @@ Queda bloqueado, recibe el motivo y crea una rama `feat/` por su cuenta.
 | `check-file` | El archivo recién editado, con ESLint | Un error de lint que el agente dejó |
 | `verify-gate` | Los tests del proyecto, al terminar | Dar por terminada una tarea con tests rotos |
 
+### Publicar el repo
+
+`/skuizops:publish` (solo la persona, el modelo no puede invocarlo) vuelve público el repo de GitHub y deja que solo los colaboradores puedan hacer push o abrir pull requests. Sin argumento muestra el plan y no cambia nada; para aplicarlo, escribe `/skuizops:publish owner/repo`. Se detiene si hay archivos con pinta de secreto en git. Cualquiera puede seguir haciendo fork de un repo público.
+
 Detalle completo de reglas, alcance y modelo de confianza: [plugins/skuizops/README.md](plugins/skuizops/README.md) (en inglés).
 
 ## Más detalle
