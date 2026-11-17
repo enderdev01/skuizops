@@ -64,6 +64,23 @@ Eso es todo. El comando:
 
 Para actualizar, ejecuta el mismo comando otra vez.
 
+## Desinstalar
+
+Dentro de tu proyecto:
+
+```bash
+npx github:enderdev01/skuizops uninstall
+```
+
+Muestra lo que va a quitar y pregunta una vez `Uninstall skuizops? [y/N]`. Sin terminal interactiva o sin un sí, no cambia nada. Quita:
+
+- los hooks de git y guards que instaló (si editaste un archivo, lo conserva) y `core.hooksPath` si apunta a `.githooks` y ya no queda nada ahí;
+- el proyecto de la lista de confiables (si hay otros proyectos confiables, los lista: ejecuta la desinstalación en cada uno);
+- `agent` (si es `skuizops:lemon`) y `outputStyle` (si es `brief`) de `.claude/settings.json`, y `.claude/output-styles/brief.md` si no lo editaste;
+- la entrada del marketplace en `~/.claude/settings.json`, el plugin y el marketplace.
+
+No toca las skills de terceros (ponytail, engram, unslop, stageshow), Playwright, ni tu `.claude/verification` y `scripts/control.mjs`. Después, reinicia las sesiones de Claude abiertas.
+
 <details>
 <summary>Instalación manual</summary>
 

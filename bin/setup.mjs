@@ -234,11 +234,12 @@ const yellow = (s) => paint(33, s);
 const red = (s) => paint(31, s);
 const dim = (s) => paint(2, s);
 const FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
-const MARK = { ok: green("✓"), skip: yellow("•"), fail: red("✗") };
-const out = (s) => process.stdout.write(`${s}\n`);
+export const MARK = { ok: green("✓"), skip: yellow("•"), fail: red("✗") };
+export const out = (s) => process.stdout.write(`${s}\n`);
+export { dim };
 
-// fn(ui) returns { status: "ok" | "skip", text?, details? } or throws. 
-async function step(label, fn) {
+// fn(ui) returns { status: "ok" | "skip", text?, details? } or throws.
+export async function step(label, fn) {
   let timer;
   let i = 0;
   const clear = () => fancy && process.stdout.write("\r\x1b[2K");
@@ -412,4 +413,7 @@ async function main() {
   child.on("exit", (code) => process.exit(code ?? 0));
 }
 
-if (isMain(import.meta.url)) await main();
+if (isMain(import.meta.url)) {
+  if (process.argv[2] === "uninstall") process.exitCode = await (await import("./uninstall.mjs")).uninstall({ step, out, MARK, dim });
+  else await main();
+}
