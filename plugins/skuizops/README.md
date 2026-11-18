@@ -1,6 +1,6 @@
 # skuizops
 
-A Claude Code plugin that makes agents check their own work. It follows the pyramid, strongest guarantee first:
+A Claude Code and OpenAI Codex CLI plugin that makes agents check their own work (Codex: see [Codex](#codex)). It follows the pyramid, strongest guarantee first:
 **codebase > static analysis > verification > prose > human review**.
 
 ## Agents
@@ -45,7 +45,7 @@ The plugin installs for your whole user, but its Claude Code hooks (branch guard
 
 ### Trust and protected files
 
-The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/skuizops/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. To trust a project, use the `/skuizops:trust` command:
+The verify gate and the linter run the project's own code, so they only run in projects you trust. The trust list lives outside every repo, in `~/.config/skuizops/trusted-projects` (one absolute path per line). Only you edit it. Agents are blocked from it on Edit and Write. Through Bash, any command that mentions it is blocked unless it only reads (`cat`, `ls`, `grep` and the like, with no redirection). Trust is the exact listed root, compared through symlinks: a project nested inside a trusted folder is not trusted, and neither is a case variant of it. A linked git worktree is not trusted through the main worktree it came from: trust each worktree where you open a session. To trust a project, use the `/skuizops:trust` command:
 
 ```
 /skuizops:trust
@@ -79,7 +79,7 @@ To validate the skuizops setup of a project, use the `/skuizops:check` command:
 /skuizops:check
 ```
 
-It prints one row per check: the plugin is installed and enabled, the default agent exists, the git hooks and the guard copies match the installed version, the project is trusted, and nothing of the old `dev-factory` name remains. Each `FAIL` row says how to fix it; the language in effect and the verification map are informative rows. It only reads: it changes no file, works outside a git repository, and exits 1 when any check fails. Unlike the other two commands, agents may run it. A SessionStart hook runs it quietly (`check.mjs notice`) and asks lemon to tell you to run the command only when a check fails.
+It prints one row per check: the plugin is installed and enabled, the default agent exists, the git hooks and the guard copies match the installed version, the project is trusted, and nothing of the old `dev-factory` name remains. Each `FAIL` row says how to fix it; the language in effect and the verification map are informative rows. It only reads: it changes no file, works outside a git repository, and exits 1 when any check fails. Unlike the other two commands, agents may run it. A SessionStart hook runs it quietly (`check.mjs notice`) and, only when a check fails, asks lemon to mention it to you without stopping its task. In a linked worktree it reads the main worktree's untracked `.githooks/.skuizops.json` manifest.
 
 ### Protected paths
 
@@ -130,6 +130,17 @@ Manual:
 claude plugin marketplace add <path-to-this-repo>
 claude plugin install skuizops@juicebar
 ```
+
+## Codex
+
+When `codex` is on the PATH, the setup command also sets skuizops up for OpenAI Codex CLI, and the uninstall reverts only what it added:
+
+- Marketplace and plugin: `codex plugin marketplace add enderdev01/skuizops` (or `upgrade juicebar`) and `codex plugin add skuizops@juicebar`. The Codex manifest is `.codex-plugin/plugin.json`, the marketplace `.agents/plugins/marketplace.json`, and the hooks `hooks/codex-hooks.json`.
+- Agents: `~/.codex/agents/skuizops-{kiwi,fig,mango,cherry}.toml`, generated from `agents/*.md`. Haiku maps to `gpt-6.1-terra` and Sonnet to `gpt-6.2-sol`. A preamble tells them to skip the Claude-only tools (Chrome MCP, `TaskStop`).
+- Lemon: a `developer_instructions` block between `# skuizops:lemon begin` and `# skuizops:lemon end` at the top of the project's `.codex/config.toml`.
+- Trust: `[projects."<root>"] trust_level = "trusted"` in `~/.codex/config.toml`, after a `# skuizops:` note. Codex loads a project's `.codex/config.toml` only with that exact entry. An existing entry in any TOML form is detected and left alone.
+
+Codex does not trust a plugin's hooks on install: open `codex` in the project and run `/hooks` once. Codex hook payloads match Claude's, so the guards run unchanged on Bash. `path-guard` also checks every path named in an `apply_patch` header (`Add File`, `Update File`, `Delete File`, `Move to`), as a tool call or from the shell. Not available in Codex: lint on edit (`check-file`, `apply_patch` gives no `file_path`), the agent emoji, and the update notice (`update-check.mjs codex` prints nothing).
 
 ## First run
 

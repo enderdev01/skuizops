@@ -3,13 +3,14 @@
 <h3 align="center">Cinco frutas trabajan tu código. Nada podrido llega a <code>main</code>.</h3>
 
 <p align="center">
-  Un equipo de agentes para Claude Code:<br>
+  Un equipo de agentes para Claude Code y OpenAI Codex:<br>
   🍋 <b>lemon</b> organiza · 🥝 <b>kiwi</b> busca · 🫐 <b>fig</b> lee los logs · 🥭 <b>mango</b> construye · 🍒 <b>cherry</b> comprueba<br>
   Cada tarea va al modelo más barato que puede hacerla, y ningún atajo pasa: ni commits en <code>main</code>, ni tests en rojo.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Claude%20Code-plugin-d97757" alt="Plugin de Claude Code">
+  <img src="https://img.shields.io/badge/Codex%20CLI-plugin-412991" alt="Plugin de Codex CLI">
   <img src="https://img.shields.io/badge/dependencias-0-brightgreen" alt="0 dependencias">
   <img src="https://img.shields.io/badge/por%20revisi%C3%B3n-~50%20ms-blue" alt="Unos 50 ms por revisión">
 </p>
@@ -59,6 +60,7 @@ Eso es todo. El comando:
 - marca el proyecto como confiable y deja a `lemon` como agente por defecto (sin pisar tu configuración);
 - activa el estilo de salida `brief` (respuestas breves; se desactiva quitando la clave `outputStyle` de `.claude/settings.json`; si ya tienes uno, lo respeta);
 - ofrece, con un solo sí/no, instalar skills recomendadas de terceros (ponytail, engram y, con UI web, unslop y stageshow; detalle y licencias en el README del plugin). Sin un sí explícito no instala nada;
+- si tienes `codex` instalado, configura también skuizops para Codex (ver [Codex](#codex));
 - avisa de que la sesión de Claude que abre usa el consumo de tu plan;
 - reabre Claude Code con un saludo.
 
@@ -77,7 +79,8 @@ Muestra lo que va a quitar y pregunta una vez `Uninstall skuizops? [y/N]`. Sin t
 - los hooks de git y guards que instaló (si editaste un archivo, lo conserva) y `core.hooksPath` si apunta a `.githooks` y ya no queda nada ahí;
 - el proyecto de la lista de confiables (si hay otros proyectos confiables, los lista: ejecuta la desinstalación en cada uno);
 - `agent` (si es `skuizops:lemon`) y `outputStyle` (si es `brief`) de `.claude/settings.json`, y `.claude/output-styles/brief.md` si no lo editaste;
-- la entrada del marketplace en `~/.claude/settings.json`, el plugin y el marketplace.
+- la entrada del marketplace en `~/.claude/settings.json`, el plugin y el marketplace;
+- lo que añadió para Codex: los agentes `~/.codex/agents/skuizops-*.toml`, el bloque de lemon en `.codex/config.toml`, la entrada de confianza en `~/.codex/config.toml` y, si `codex` está instalado, el plugin y el marketplace de Codex.
 
 No toca las skills de terceros (ponytail, engram, unslop, stageshow), Playwright, ni tu `.claude/verification` y `scripts/control.mjs`. Después, reinicia las sesiones de Claude abiertas.
 
@@ -98,6 +101,27 @@ Luego, en cada proyecto dentro de `~/DEV`:
 | 3 | Abrir una sesión nueva y trabajar normal | Las protecciones actúan solas |
 
 </details>
+
+## Codex
+
+skuizops funciona también en [OpenAI Codex CLI](https://github.com/openai/codex), con las mismas reglas que en Claude Code. Si `codex` está en el PATH, el mismo `npx github:enderdev01/skuizops`:
+
+- instala o actualiza el marketplace `juicebar` y el plugin `skuizops@juicebar` en Codex;
+- crea los agentes en `~/.codex/agents/skuizops-*.toml`: `kiwi` y `fig` con `gpt-6.1-terra`, `mango` y `cherry` con `gpt-6.2-sol`;
+- deja a `lemon` como orquestador con un bloque `developer_instructions` marcado en `.codex/config.toml` del proyecto;
+- marca el proyecto como confiable en `~/.codex/config.toml` (`[projects."<raíz>"] trust_level = "trusted"`). Sin esa entrada, Codex no carga el `.codex/config.toml` del proyecto.
+
+Falta un paso, que es solo tuyo: Codex no confía en los hooks de un plugin al instalarlo. Abre `codex` en el proyecto y ejecuta `/hooks` una vez para revisarlos y aceptarlos.
+
+| Protección | En Codex |
+|---|---|
+| `branch-guard` | Igual que en Claude Code |
+| `path-guard` | Revisa también las ediciones de `apply_patch`, incluso lanzado desde la shell |
+| `attribution-guard` y hooks de git | Igual: son de git, no del agente |
+| `verify-gate` | Igual: no termina con los tests en rojo |
+| `check-file` | No disponible: `apply_patch` no dice qué archivo editó |
+
+Los agentes de Codex reciben las mismas instrucciones que en Claude Code, con un preámbulo que les pide omitir las herramientas que solo existen en Claude (las de Chrome y `TaskStop`). El aviso de versión nueva no funciona en Codex: para actualizar, vuelve a ejecutar el comando de instalación.
 
 ## Pruébalo
 
