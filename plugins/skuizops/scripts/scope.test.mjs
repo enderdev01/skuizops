@@ -1,9 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inScope, isTrusted, scopeRoots, trustHint } from "./scope.mjs";
+import { inScope, isTrusted, mainWorktree, scopeRoots, trustHint } from "./scope.mjs";
 
 const env = { HOME: "/Users/ada" };
 
@@ -55,6 +56,61 @@ describe("isTrusted", () => {
   });
   it("never trusts a directory name containing a newline", () => {
     assert.equal(isTrusted("/work/app\n/work/b", env), false);
+  });
+});
+
+describe("linked worktrees", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "wt-")));
+  const env = { HOME: base };
+  const main = join(base, "main");
+  const wt = join(base, "wt");
+  const git = (...args) => spawnSync("git", ["-C", main, "-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" });
+  mkdirSync(main);
+  git("init", "-q");
+  git("commit", "-q", "--allow-empty", "-m", "init");
+  git("worktree", "add", "-q", wt, "-b", "feat/x");
+  const trustList = (text) => {
+    mkdirSync(join(base, ".config", "skuizops"), { recursive: true });
+    writeFileSync(join(base, ".config", "skuizops", "trusted-projects"), text);
+  };
+
+  it("mainWorktree gives the main root for a worktree, itself for the main, null outside git", () => {
+    assert.equal(mainWorktree(wt), main);
+    assert.equal(mainWorktree(main), main);
+    assert.equal(mainWorktree(tmpdir()), null);
+  });
+  it("does not trust a worktree through its trusted main worktree, only when listed itself", () => {
+    trustList(`${main}\n`);
+    assert.equal(isTrusted(wt, env), false);
+    trustList(`${main}\n${wt}\n`);
+    assert.equal(isTrusted(wt, env), true);
+  });
+  it("does not inherit trust through a symlinked .git pointing at a real worktree", () => {
+    trustList(`${main}\n`);
+    const z = join(base, "linked-git");
+    mkdirSync(z);
+    symlinkSync(join(wt, ".git"), join(z, ".git"));
+    assert.equal(isTrusted(z, env), false);
+  });
+  it("does not inherit trust through a forged .git file", () => {
+    trustList(`${main}\n`);
+    const fake = join(base, "fake");
+    mkdirSync(fake);
+    writeFileSync(join(fake, ".git"), `gitdir: ${join(main, ".git", "worktrees", "wt")}\n`);
+    assert.equal(isTrusted(fake, env), false);
+  });
+  it("does not inherit trust through a fully self-contained forged worktree admin dir", () => {
+    trustList(`${main}\n`);
+    const x = join(base, "forged");
+    const admin = join(x, "fake");
+    mkdirSync(join(admin, "objects"), { recursive: true });
+    mkdirSync(join(admin, "refs"));
+    writeFileSync(join(admin, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(admin, "commondir"), `${join(main, ".git")}\n`);
+    writeFileSync(join(admin, "gitdir"), `${join(x, ".git")}\n`);
+    writeFileSync(join(x, ".git"), `gitdir: ${admin}\n`);
+    assert.notEqual(mainWorktree(x), main);
+    assert.equal(isTrusted(x, env), false);
   });
 });
 

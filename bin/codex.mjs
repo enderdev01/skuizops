@@ -117,6 +117,68 @@ export function ensurePluginEnabled(home) {
   return true;
 }
 
+// Codex loads <project>/.codex/config.toml only when ~/.codex/config.toml lists that exact path as trusted. Appends only; a table the user wrote is never touched.
+const TRUST_NOTE = "# skuizops: trusted so Codex loads this project's .codex/config.toml";
+const trustTable = (root) => `[projects.${JSON.stringify(root)}]`;
+// TOML dotted key ("projects" . '/p' ...) -> decoded parts, or null when it does not parse.
+const KEY_TOKEN = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[\w-]+`;
+function keyParts(s) {
+  const re = new RegExp(String.raw`\s*(${KEY_TOKEN})\s*(\.|$)`, "y");
+  const parts = [];
+  for (let m; parts.length === 0 || re.lastIndex < s.length; ) {
+    if (!(m = re.exec(s))) return null;
+    const tok = m[1];
+    try {
+      parts.push(tok[0] === '"' ? JSON.parse(tok) : tok[0] === "'" ? tok.slice(1, -1) : tok);
+    } catch {
+      return null;
+    }
+    if (!m[2]) break;
+  }
+  return parts;
+}
+// True when config text already defines projects.<root> in any TOML form: [projects."r"], [projects.'r'], spaced headers,
+// `"r" = {...}` under [projects], or a dotted key projects."r".x = ... Comment lines are ignored.
+// shortcut: a `projects = { "r" = ... }` top-level inline table and header-like lines inside multi-line strings are not recognised.
+export function hasProjectTrust(text, root) {
+  let table = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const header = /^\s*\[(?!\[)(.*?)\]\s*(?:#.*)?$/.exec(line);
+    if (header) {
+      table = keyParts(header[1]) ?? [];
+      if (table[0] === "projects" && table[1] === root && table.length === 2) return true;
+      continue;
+    }
+    const kv = new RegExp(String.raw`^\s*((?:(?:${KEY_TOKEN})\s*\.?\s*)+)=`).exec(line);
+    const full = kv && keyParts(kv[1].trim());
+    if (full && [...table, ...full][0] === "projects" && [...table, ...full][1] === root) return true;
+  }
+  return false;
+}
+// Ensure adds exactly one "\n" before its note and remove strips exactly one, so the round trip restores any original bytes,
+// with or without a trailing newline.
+export function ensureCodexProjectTrust(home, root) {
+  const file = join(home, ".codex", "config.toml");
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  if (hasProjectTrust(text, root)) return { status: "skip", message: "already trusted" };
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  appendFileSync(file, `\n${TRUST_NOTE}\n${trustTable(root)}\ntrust_level = "trusted"\n`);
+  return { status: "ok", message: `trusted ${root} in ~/.codex/config.toml` };
+}
+
+// Removes only the three lines ensureCodexProjectTrust appended, and only when they are exactly ours.
+export function removeCodexProjectTrust(home, root) {
+  const file = join(home, ".codex", "config.toml");
+  const ours = `${TRUST_NOTE}\n${trustTable(root)}\ntrust_level = "trusted"\n`;
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const at = text.indexOf(ours);
+  if (at < 0) return { status: "skip", message: "no skuizops trust entry" };
+  const from = at > 0 && text[at - 1] === "\n" ? at - 1 : at;
+  writeFileSync(file, text.slice(0, from) + text.slice(at + ours.length));
+  return { status: "ok", message: `removed trust of ${root}` };
+}
+
 // codex plugin marketplace list --json -> { marketplaces: [{ name }] }; codex plugin list --json -> { installed: [{ pluginId, version }] }
 export const pickCodexMarketplaceAction = (json) => (json.marketplaces?.some((m) => m.name === MARKETPLACE) ? "upgrade" : "add");
 export const isCodexPluginInstalled = (json) => !!json.installed?.some((p) => p.pluginId === PLUGIN);
@@ -156,6 +218,7 @@ export async function setupCodex({ step, out, MARK, dim }, { home, root, exec })
   });
   await track("Codex agents", async () => asStep(writeAgents(home)));
   await track("Codex lemon orchestrator", async () => (root ? asStep(setLemonCodex(root)) : { status: "skip", text: "not a git repository" }));
+  await track("Codex project trust", async () => (root ? asStep(ensureCodexProjectTrust(home, root)) : { status: "skip", text: "not a git repository" }));
   out(dim("  Codex: open codex in this project and run /hooks to review and trust the skuizops hooks."));
   return failed;
 }
@@ -166,6 +229,7 @@ export async function uninstallCodex({ step, out, MARK, dim }, { home, root, exe
   const track = async (label, fn) => (failed ||= (await step(label, fn)).status === "fail");
   await track("Codex agents", async () => asStep(removeAgents(home)));
   await track("Codex lemon orchestrator", async () => (root ? asStep(removeLemonCodex(root)) : { status: "skip", text: "not a git repository" }));
+  await track("Codex project trust", async () => (root ? asStep(removeCodexProjectTrust(home, root)) : { status: "skip", text: "not a git repository" }));
   if (!(await hasCodex(exec))) {
     out(`${MARK.skip} Codex ${dim("CLI not found, plugin and marketplace left alone")}`);
     return failed;

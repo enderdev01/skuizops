@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sources } from "./install-hooks.mjs";
-import { inScope, isMain,isTrusted, projectDir } from "./scope.mjs";
+import { inScope, isMain, isTrusted, mainWorktree, projectDir } from "./scope.mjs";
 
 const ID = "skuizops@juicebar";
 const LEMON = "skuizops:lemon";
@@ -69,7 +69,8 @@ function hookProblems(project) {
   const guards = [];
   const path = spawnSync("git", ["-C", project, "config", "--local", "--get", "core.hooksPath"], { encoding: "utf8" });
   if (path.stdout?.trim() !== ".githooks") hooks.push("core.hooksPath is not .githooks");
-  const manifest = readJson(join(project, ".githooks", ".skuizops.json"));
+  // The manifest is untracked: a linked worktree reads the one of its main worktree.
+  const manifest = readJson(join(project, ".githooks", ".skuizops.json")) ?? readJson(join(mainWorktree(project) ?? project, ".githooks", ".skuizops.json"));
   if (!manifest?.files) return { hooks: [...hooks, "no .githooks/.skuizops.json manifest"], guards: ["no manifest"] };
   for (const { from, rel, mode } of sources()) {
     const file = join(project, rel);
@@ -125,7 +126,7 @@ export function check({ project, home = homedir(), env = process.env, pluginRoot
 
 export function notice(rows) {
   const failed = rows.filter((r) => r.status === "fail").map((r) => r.name);
-  return failed.length ? `skuizops: the configuration of this project has problems (${failed.join(", ")}). Tell the human to run /skuizops:check to see how to fix each one. Do not change anything yourself.` : "";
+  return failed.length ? `skuizops: this project's setup is incomplete (${failed.join(", ")}). Mention it to the human, who fixes it with /skuizops:check. It does not block your task: carry on.` : "";
 }
 
 function main() {

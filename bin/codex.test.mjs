@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentToml, codexModel, ensurePluginEnabled, parseAgent, removeAgents, removeLemonCodex, setLemonCodex, setupCodex, tomlMultiline, uninstallCodex, writeAgents } from "./codex.mjs";
+import { agentToml, codexModel, ensureCodexProjectTrust, ensurePluginEnabled, parseAgent, removeAgents, removeCodexProjectTrust, removeLemonCodex, setLemonCodex, setupCodex, tomlMultiline, uninstallCodex, writeAgents } from "./codex.mjs";
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), "skuizops-cx-")));
 const MARK = { ok: "ok", skip: "skip", fail: "fail" };
@@ -141,6 +141,106 @@ describe("ensurePluginEnabled", () => {
     assert.equal(ensurePluginEnabled(home), true);
     assert.equal(ensurePluginEnabled(home), false);
     assert.equal(readFileSync(join(home, ".codex", "config.toml"), "utf8"), 'a = 1\n\n[plugins."skuizops@juicebar"]\nenabled = true\n');
+  });
+});
+
+describe("Codex project trust", () => {
+  const cfg = (home) => join(home, ".codex", "config.toml");
+  const ours = (root) => `\n# skuizops: trusted so Codex loads this project's .codex/config.toml\n[projects.${JSON.stringify(root)}]\ntrust_level = "trusted"\n`;
+  it("appends once and is idempotent", () => {
+    const home = tmp();
+    mkdirSync(join(home, ".codex"));
+    writeFileSync(cfg(home), "a = 1\n");
+    assert.equal(ensureCodexProjectTrust(home, "/p/app").status, "ok");
+    const once = readFileSync(cfg(home), "utf8");
+    assert.equal(once, `a = 1\n${ours("/p/app")}`);
+    assert.equal(ensureCodexProjectTrust(home, "/p/app").message, "already trusted");
+    assert.equal(readFileSync(cfg(home), "utf8"), once);
+  });
+  it("creates the file when missing", () => {
+    const home = tmp();
+    ensureCodexProjectTrust(home, "/p/app");
+    assert.ok(readFileSync(cfg(home), "utf8").includes('trust_level = "trusted"'));
+  });
+  it("keeps a user-written table untouched, even with another trust_level", () => {
+    const home = tmp();
+    mkdirSync(join(home, ".codex"));
+    const mine = '[projects."/p/app"]\ntrust_level = "untrusted"\n';
+    writeFileSync(cfg(home), mine);
+    assert.equal(ensureCodexProjectTrust(home, "/p/app").status, "skip");
+    assert.equal(removeCodexProjectTrust(home, "/p/app").status, "skip");
+    assert.equal(readFileSync(cfg(home), "utf8"), mine);
+  });
+  it("uninstall removes only ours and restores the original bytes", () => {
+    const home = tmp();
+    mkdirSync(join(home, ".codex"));
+    const before = 'a = 1\n\n[projects."/other"]\ntrust_level = "trusted"\n';
+    writeFileSync(cfg(home), before);
+    ensureCodexProjectTrust(home, "/p/app");
+    assert.equal(removeCodexProjectTrust(home, "/p/app").status, "ok");
+    assert.equal(readFileSync(cfg(home), "utf8"), before);
+  });
+  it("escapes spaces and quotes in the path", () => {
+    const home = tmp();
+    const root = '/p/my "app" \\ x';
+    ensureCodexProjectTrust(home, root);
+    assert.ok(readFileSync(cfg(home), "utf8").includes('[projects."/p/my \\"app\\" \\\\ x"]'));
+    assert.equal(ensureCodexProjectTrust(home, root).status, "skip");
+    assert.equal(removeCodexProjectTrust(home, root).status, "ok");
+  });
+  describe("detects existing trust in any TOML form", () => {
+    const R = "/p/app";
+    const forms = {
+      "basic header": '[projects."/p/app"]\ntrust_level = "trusted"\n',
+      "literal header": "[projects.'/p/app']\ntrust_level = \"trusted\"\n",
+      "spaced header": '[ projects . "/p/app" ]\ntrust_level = "trusted"\n',
+      "header with trailing comment": '[projects."/p/app"] # mine\ntrust_level = "trusted"\n',
+      "header with trailing comment containing ]": '[projects."/p/app"] # see [docs]\ntrust_level = "trusted"\n',
+      "inline entry, basic key": '[projects]\n"/p/app" = { trust_level = "trusted" }\n',
+      "inline entry, literal key": "[projects]\n'/p/app' = { trust_level = \"trusted\" }\n",
+      "top-level dotted key": 'a = 1\nprojects."/p/app".trust_level = "trusted"\n',
+      "dotted key under [projects]": '[projects]\n"/p/app".trust_level = "trusted"\n',
+    };
+    for (const [name, toml] of Object.entries(forms)) {
+      it(name, () => {
+        const home = tmp();
+        mkdirSync(join(home, ".codex"));
+        writeFileSync(cfg(home), toml);
+        assert.equal(ensureCodexProjectTrust(home, R).message, "already trusted");
+        assert.equal(readFileSync(cfg(home), "utf8"), toml);
+      });
+    }
+    it("a header inside a comment does not count", () => {
+      const home = tmp();
+      mkdirSync(join(home, ".codex"));
+      writeFileSync(cfg(home), '# [projects."/p/app"]\n  #projects."/p/app".trust_level = "trusted"\n');
+      assert.equal(ensureCodexProjectTrust(home, R).status, "ok");
+    });
+    it("another project's entry does not count", () => {
+      const home = tmp();
+      mkdirSync(join(home, ".codex"));
+      writeFileSync(cfg(home), '[projects."/p/app2"]\ntrust_level = "trusted"\n');
+      assert.equal(ensureCodexProjectTrust(home, R).status, "ok");
+    });
+  });
+  it("round trip restores the exact bytes, with and without a trailing newline", () => {
+    for (const before of ["a = 1", "a = 1\n", "a = 1\n\n", "", "\n"]) {
+      const home = tmp();
+      mkdirSync(join(home, ".codex"));
+      writeFileSync(cfg(home), before);
+      assert.equal(ensureCodexProjectTrust(home, "/p/app").status, "ok");
+      assert.equal(removeCodexProjectTrust(home, "/p/app").status, "ok");
+      assert.equal(readFileSync(cfg(home), "utf8"), before);
+    }
+  });
+  it("setup trusts the root and uninstall removes it", async () => {
+    const home = tmp();
+    const root = tmp();
+    const exec = fakeExec();
+    await setupCodex(ui, { home, root, exec });
+    assert.ok(readFileSync(cfg(home), "utf8").includes(`[projects.${JSON.stringify(root)}]`));
+    await uninstallCodex(ui, { home, root, exec });
+    assert.ok(!readFileSync(cfg(home), "utf8").includes("[projects."));
   });
 });
 
