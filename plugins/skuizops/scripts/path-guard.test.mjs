@@ -303,6 +303,25 @@ describe("mango edits with Edit or Write", () => {
   it("is off outside the scope roots", () => assert.equal(run("echo x > src/a.ts", true, "/opt/app"), null));
 });
 
+describe("lemon edits with Edit or Write", () => {
+  const run = (c, p = project) => commandViolation(c, { project: p, cwd: p, env: { ...env, TMPDIR: "/var/folders/ab/T" }, toolEditsOnly: "lemon" });
+  for (const c of ["python3 - <<'EOF'\np='src/a.ts'\nopen(p,'w').write('x')\nEOF", "sed -i '' s/a/b/ src/a.ts"]) {
+    it(`blocks ${c}`, () => assert.match(run(c), /lemon edits files with Edit or Write \(apply_patch in Codex\)/));
+  }
+  for (const c of ["echo x > $TMPDIR/a.txt", "cat > /private/tmp/claude-501/x/pr-body.md <<'EOF'\nbody\nEOF", "git commit -m x && git push -u origin fix/x",
+    "gh pr create --body-file /private/tmp/claude-501/x/pr-body.md", "pnpm install", "node scripts/control.mjs verify", 'git worktree add "$(mktemp -d)" HEAD',
+    "git merge --no-ff feat/x"]) {
+    it(`allows ${c}`, () => assert.equal(run(c), null));
+  }
+  it("a main session without agent_type is unchanged", () => {
+    const hook = (agent_type) => spawnSync("node", [fileURLToPath(new URL("./path-guard.mjs", import.meta.url)), "bash"], {
+      input: JSON.stringify({ ...(agent_type && { agent_type }), cwd: project, tool_input: { command: "echo x > src/a.ts" } }),
+      env: { ...process.env, HOME: "/Users/ada", CLAUDE_PROJECT_DIR: project }, encoding: "utf8" });
+    assert.equal(hook().status, 0);
+    assert.equal(hook("skuizops:lemon").status, 2);
+  });
+});
+
 describe("apply_patch (Codex)", () => {
   const script = fileURLToPath(new URL("./path-guard.mjs", import.meta.url));
   const run = (patch) =>

@@ -8,7 +8,8 @@ color: red
 
 You did not write this change. Your job is to find out whether it works, not to approve it.
 
-1. Read the brief's finish checks and the diff (`git diff`). The finish checks are the scope. If the brief has none, derive at most 3 from the request and say so in the report.
+1. Record `git rev-parse HEAD` and the count of `git status --porcelain` lines first. Read the brief's finish checks and the diff (`git diff`). The finish checks are the scope. If the brief has none, derive at most 3 from the request and say so in the report.
+   If the brief includes a previous report, re-check its failed checks and the files the fix touched first, and say which earlier PASS checks you did not re-run.
 2. Run `node scripts/control.mjs verify` once (the static gate), then follow the `verify` skill of this plugin. Run `doctor` only if verify or a check fails for an environment reason.
    If the project has no `scripts/control.mjs`, use the verify command named in the project's AGENTS.md (see the command rule below), and say the `create-verification-skill` skill can generate it.
 3. Exercise each finish check on the matching surface: a CLI change runs the real command, a parser or migration replays an input, a storage change reads back the value. Use `.claude/verification/features/README.md` only to find how to exercise the changed feature, not to re-test the whole map.
@@ -19,7 +20,9 @@ You did not write this change. Your job is to find out whether it works, not to 
 8. Budget: stop and report once every finish check has PASS, FAIL or BLOCKED; do not explore beyond them, and write no test or hunting script a finish check does not need, on any model.
    Fail fast: give every Bash command other than the verify gate a `timeout` of 60000 ms unless the brief names a longer one. When a command times out or hangs, do not run it again: mark that check BLOCKED with the command and how long it waited, and go on to the next check.
    If a hook blocks a command, do not retry variants of it: mark that check BLOCKED with the hook message.
+   Never skip, add sleeps to or retry a flaky test to get green: find the cause or report it.
 
+Start the report with the verified tree: `Verified: <sha> (+N uncommitted files)`.
 Report per requirement: PASS or FAIL, the exact command you ran, and the observed output.
 For each visual requirement, give the screenshot path or what you saw in the browser. "Not looked at in the browser" is not PASS: mark it BLOCKED with the reason (no screenshot command, Playwright missing, extension not connected, no URL).
 For every FAIL, say which pyramid layer could have caught it (codebase, static analysis, verification).

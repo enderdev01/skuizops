@@ -56,7 +56,7 @@ const GIT_MUTATES = ["stash", "checkout", "switch", "restore", "reset", "clean",
 const REF_WRITE_OPTS = { tag: /^-[a-zA-Z]*[dfasumF]|^--(delete|force|annotate|sign|local-user|message|file)/, branch: /^-[a-zA-Z]*[dDfmMcCu]|^--(delete|force|move|copy|set-upstream-to|unset-upstream)/ };
 const REF_LIST_OPTS = /^(-l|--list|--contains|--points-at|--merged|--no-merged|--show-current|--verify)$/;
 const CHERRY_MSG = 'cherry is read-only on the project: reproduce or mutate in a copy (git worktree add "$(mktemp -d)" or cp -R into a mktemp dir), never the live tree.';
-const MANGO_MSG = "mango edits files with Edit or Write, not through Bash (redirects, heredocs, tee, sed -i, perl -i, inline python/node writes): a scripted replace that misses its text fails silently. Bash may write only under the temp dir.";
+const editsMsg = (who) => `${who} edits files with Edit or Write (apply_patch in Codex), not through Bash (redirects, heredocs, tee, sed -i, perl -i, inline python/node writes): a scripted replace that misses its text fails silently. Bash may write only under the temp dir.`;
 const INLINE_CODE = /\b(python3?|node|perl|ruby|bun|deno)\b[^\n;&|]*(\s-\w*[ce]\b|\s--eval\b|\s-(\s|$)|<<)/;
 const FILE_WRITE_API = /(?<!stdout|stderr)\.write\(|write_(text|bytes)\(|(write|append)FileSync|createWriteStream|open\([^)]*,\s*['"][wax]/;
 const READ_ONLY = ["cat", "ls", "head", "tail", "wc", "stat", "file", "grep", "rg", "diff"];
@@ -225,10 +225,11 @@ function writtenWords(words) {
 // Best effort: a shell command that writes to a path editViolation protects, or mentions the trust list
 // without being read-only. Interpreters, variables and indirection can still write.
 // readOnly (cherry): nothing under the project changes and git does not touch the tree or refs.
-// toolEditsOnly (mango): file contents change through Edit/Write; Bash writes only under the temp dir.
+// toolEditsOnly (mango, lemon; the agent name, or true for mango): file contents change through Edit/Write; Bash writes only under the temp dir.
 export function commandViolation(command, { project, cwd, env = process.env, readOnly = false, toolEditsOnly = false } = {}) {
   readOnly = readOnly && inScope(project, env);
-  toolEditsOnly = toolEditsOnly && inScope(project, env);
+  toolEditsOnly = toolEditsOnly && inScope(project, env) && toolEditsOnly;
+  const MANGO_MSG = editsMsg(typeof toolEditsOnly === "string" ? toolEditsOnly : "mango");
   // Codex can run `apply_patch` from the shell (heredoc bodies are dropped below): check the patch headers it names.
   const patched = patchPaths(command, cwd ?? process.cwd()).map((p) => editViolation(p, project, env)).find(Boolean);
   if (patched) return patched;
@@ -293,8 +294,9 @@ if (isMain(import.meta.url)) {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   const bash = process.argv[2] === "bash";
   const project = projectDir(input);
+  const agent = input.agent_type?.split(":").pop();
   const problem = bash
-    ? commandViolation(input.tool_input?.command ?? "", { project, cwd: input.cwd ?? process.cwd(), readOnly: input.agent_type?.split(":").pop() === "cherry", toolEditsOnly: input.agent_type?.split(":").pop() === "mango" })
+    ? commandViolation(input.tool_input?.command ?? "", { project, cwd: input.cwd ?? process.cwd(), readOnly: agent === "cherry", toolEditsOnly: ["mango", "lemon"].includes(agent) && agent })
     : input.tool_name === "apply_patch"
       ? patchPaths(input.tool_input?.command ?? input.tool_input?.input, input.cwd ?? process.cwd()).map((p) => editViolation(p, project)).find(Boolean)
       : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, project);

@@ -19,6 +19,7 @@ Never invent an expected output: observe it by running the command.
    - Command no longer runs: fix the command in the README (and `scripts/control.mjs` if the subcommand is stale), or remove the row if the feature is gone.
 3. Ask kiwi to find user-facing features in the code that are missing from the map, including canvas/3D scenes (cover them as `create-verification-skill` step 3 says). For each: add a subcommand to `scripts/control.mjs` if needed, a row in the README, and a feature file filled with observed input and output.
 4. Remove features, rows and files for features that no longer exist in the code.
+   Keep each row's `Triggers` globs current: when files moved or were renamed, update them; when a row has none, add them from the files the feature lives in.
 5. If `.gitattributes` lacks the line `.claude/verification/features/README.md merge=union`, add it (so parallel branches adding rows do not conflict).
 6. Run `node scripts/control.mjs verify` and make sure it is green.
 7. Report what changed: added, updated, removed, and anything you could not verify.

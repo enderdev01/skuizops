@@ -24,7 +24,7 @@ Plugin files live under `${CLAUDE_PLUGIN_ROOT}`. Work on a `feat/`, `fix/` or `h
      - exit 0 on success, 1 on failure.
 
 3. **Write the feature map** in `.claude/verification/features/`.
-   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command. Screens get rows whose cell is `node scripts/control.mjs screenshot [route]` (the route defaults to `/`).
+   - `README.md`: a table with columns `Feature | What it does | How to exercise it | Triggers | Details`, one row per feature, the "How to exercise it" cell being a runnable `node scripts/control.mjs ...` command. The Triggers cell is comma-separated path globs whose change makes the feature worth checking (for example `src/auth/*, src/routes/login.*`); lemon matches them against `git diff --name-only` to pick finish checks. Read which files the feature lives in; do not guess. Screens get rows whose cell is `node scripts/control.mjs screenshot [route]` (the route defaults to `/`).
    - Each table row stays on one line. Append this line to the project's `.gitattributes` (create the file if missing, never duplicate the line): `.claude/verification/features/README.md merge=union`. Parallel branches each add a row, and union merges by line, so both rows survive instead of conflicting.
    - One file per feature (linked from the Details column) with a table of expected input and output, plus the edge cases (empty, very large, invalid input).
    - The screens file includes a row for `screenshot` with no arguments, with its observed output and exit code.
