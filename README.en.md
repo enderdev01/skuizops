@@ -3,13 +3,14 @@
 <h3 align="center">Five fruits work your code. Nothing rotten reaches <code>main</code>.</h3>
 
 <p align="center">
-  A team of agents for Claude Code:<br>
+  A team of agents for Claude Code and OpenAI Codex:<br>
   🍋 <b>lemon</b> organizes · 🥝 <b>kiwi</b> searches · 🫐 <b>fig</b> reads the logs · 🥭 <b>mango</b> builds · 🍒 <b>cherry</b> verifies<br>
   Each task goes to the cheapest model that can do it, and no shortcut gets through: no commits on <code>main</code>, no red tests.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Claude%20Code-plugin-d97757" alt="Claude Code plugin">
+  <img src="https://img.shields.io/badge/Codex%20CLI-plugin-412991" alt="Codex CLI plugin">
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="0 dependencies">
   <img src="https://img.shields.io/badge/per%20check-~50%20ms-blue" alt="About 50 ms per check">
 </p>
@@ -57,6 +58,7 @@ That is all. The command:
 - turns on auto-update: new versions install on their own when Claude Code starts (an explicit `false` is kept);
 - installs the git hooks (if you edited one, it keeps a `.local-<date>` copy before replacing it);
 - marks the project as trusted and sets `lemon` as the default agent (without overwriting your settings);
+- when `codex` is installed, sets skuizops up for Codex too (see [Codex](#codex));
 - relaunches Claude Code with a welcome.
 
 To update, run the same command again.
@@ -74,7 +76,8 @@ It prints what it will remove and asks one `Uninstall skuizops? [y/N]`. Without 
 - the git hooks and guards it installed (a file you edited is kept) and `core.hooksPath` when it points to `.githooks` and nothing is left there;
 - the project from the trust list (other trusted projects are listed: run the uninstall in each one);
 - `agent` (if it is `skuizops:lemon`) and `outputStyle` (if it is `brief`) from `.claude/settings.json`, and an unedited `.claude/output-styles/brief.md`;
-- the marketplace entry in `~/.claude/settings.json`, the plugin and the marketplace.
+- the marketplace entry in `~/.claude/settings.json`, the plugin and the marketplace;
+- what it added for Codex: the agents `~/.codex/agents/skuizops-*.toml`, the lemon block in `.codex/config.toml`, the trust entry in `~/.codex/config.toml` and, when `codex` is installed, the Codex plugin and marketplace.
 
 It leaves alone the third-party skills (ponytail, engram, unslop, stageshow), Playwright, and your `.claude/verification` and `scripts/control.mjs`. Restart open Claude sessions afterwards.
 
@@ -95,6 +98,27 @@ Then, in each project under `~/DEV`:
 | 3 | Open a new session and work as usual | The protections act on their own |
 
 </details>
+
+## Codex
+
+skuizops also works in [OpenAI Codex CLI](https://github.com/openai/codex), with the same rules as in Claude Code. When `codex` is on the PATH, the same `npx github:enderdev01/skuizops`:
+
+- installs or updates the `juicebar` marketplace and the `skuizops@juicebar` plugin in Codex;
+- writes the agents to `~/.codex/agents/skuizops-*.toml`: `kiwi` and `fig` on `gpt-6.1-terra`, `mango` and `cherry` on `gpt-6.2-sol`;
+- makes `lemon` the orchestrator with a marked `developer_instructions` block in the project's `.codex/config.toml`;
+- trusts the project in `~/.codex/config.toml` (`[projects."<root>"] trust_level = "trusted"`). Without that entry Codex does not load the project's `.codex/config.toml`.
+
+One step is yours alone: Codex does not trust a plugin's hooks when it installs it. Open `codex` in the project and run `/hooks` once to review and accept them.
+
+| Protection | In Codex |
+|---|---|
+| `branch-guard` | Same as in Claude Code |
+| `path-guard` | Also checks `apply_patch` edits, even when run from the shell |
+| `attribution-guard` and git hooks | Same: they belong to git, not to the agent |
+| `verify-gate` | Same: it cannot finish with red tests |
+| `check-file` | Not available: `apply_patch` does not report which file it edited |
+
+Codex agents get the same instructions as in Claude Code, with a preamble that tells them to skip the tools only Claude has (the Chrome tools and `TaskStop`). The new-version notice does not work in Codex: to update, run the install command again.
 
 ## Try it
 
