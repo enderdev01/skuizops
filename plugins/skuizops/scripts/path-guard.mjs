@@ -230,6 +230,9 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   readOnly = readOnly && inScope(project, env);
   toolEditsOnly = toolEditsOnly && inScope(project, env) && toolEditsOnly;
   const MANGO_MSG = editsMsg(typeof toolEditsOnly === "string" ? toolEditsOnly : "mango");
+  // Codex can run `apply_patch` from the shell (heredoc bodies are dropped below): check the patch headers it names.
+  const patched = patchPaths(command, cwd ?? process.cwd()).map((p) => editViolation(p, project, env)).find(Boolean);
+  if (patched) return patched;
   // shortcut: code inside an interpreter cannot be resolved to a path, so any inline write API is blocked whatever its target; upgrade if mango needs scripted temp files.
   const inlineWrite = toolEditsOnly && INLINE_CODE.test(command) && FILE_WRITE_API.test(command);
   const flat = hideQuotedRedirects(stripHeredocs(command))
@@ -283,13 +286,20 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   return inlineWrite ? MANGO_MSG : null;
 }
 
+// Codex edits files with apply_patch: every path named in a patch header, resolved against cwd.
+export const patchPaths = (patch, cwd) =>
+  [...String(patch ?? "").matchAll(/^\s*\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$/gm)].map((m) => resolve(cwd, m[1]));
+
 if (isMain(import.meta.url)) {
   const input = JSON.parse(readFileSync(0, "utf8") || "{}");
   const bash = process.argv[2] === "bash";
+  const project = projectDir(input);
   const agent = input.agent_type?.split(":").pop();
   const problem = bash
-    ? commandViolation(input.tool_input?.command ?? "", { project: projectDir(input), cwd: input.cwd ?? process.cwd(), readOnly: agent === "cherry", toolEditsOnly: ["mango", "lemon"].includes(agent) && agent })
-    : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, projectDir(input));
+    ? commandViolation(input.tool_input?.command ?? "", { project, cwd: input.cwd ?? process.cwd(), readOnly: agent === "cherry", toolEditsOnly: ["mango", "lemon"].includes(agent) && agent })
+    : input.tool_name === "apply_patch"
+      ? patchPaths(input.tool_input?.command ?? input.tool_input?.input, input.cwd ?? process.cwd()).map((p) => editViolation(p, project)).find(Boolean)
+      : editViolation(input.tool_input?.file_path ?? input.tool_input?.notebook_path, project);
   if (problem) {
     process.stderr.write(`skuizops: ${problem}\n`);
     process.exit(2);

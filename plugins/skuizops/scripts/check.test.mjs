@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -186,5 +186,59 @@ describe("check notice", () => {
     assert.deepEqual([r.status, r.stdout], [0, ""]);
   });
 
+  it("codex host skips the Claude-only checks but keeps trust", () => {
+    const s = sandbox();
+    rmSync(join(s.home, ".claude"), { recursive: true });
+    rmSync(join(s.project, ".claude", "settings.json"));
+    const rows = check({ project: s.project, home: s.home, env: s.env, host: "codex" });
+    assert.deepEqual(rows.filter((r) => r.status === "fail"), []);
+    assert.deepEqual(rows.filter((r) => ["plugin", "default agent"].includes(r.name)), []);
+    assert.equal(check({ project: s.project, home: s.home, env: s.env }).find((r) => r.name === "plugin").status, "fail");
+    const codex = (project) => spawnSync("node", [script, "notice", "codex"], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: project }, input: "{}", encoding: "utf8" });
+    assert.equal(codex(s.project).stdout, "");
+    rmSync(join(s.home, ".config"), { recursive: true, force: true });
+    assert.match(codex(s.project).stdout, /trusted project/);
+  });
+
+  it("informs and says to carry on, never to stop", () => {
+    const s = sandbox();
+    s.setAgent("dev-factory:lemon");
+    const text = run(s).stdout;
+    assert.match(text, /setup is incomplete \(default agent, old-name leftovers\)/);
+    assert.match(text, /carry on/);
+    assert.doesNotMatch(text, /Do not change anything/);
+  });
+
   it("is empty for rows without a failure", () => assert.equal(notice([{ status: "ok", name: "x" }, { status: "info", name: "y", text: "z" }]), ""));
+});
+
+describe("linked git worktree", () => {
+  // The manifest stays untracked (as in real projects); guards and hooks are committed, so the worktree has them.
+  function withWorktree({ trusted }) {
+    const s = sandbox();
+    const g = (...args) => spawnSync("git", ["-C", s.project, "-c", "core.hooksPath=/dev/null", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" });
+    appendFileSync(join(s.project, ".git", "info", "exclude"), ".githooks/.skuizops.json\n.claude/verification\n");
+    g("add", "-A");
+    g("commit", "-q", "-m", "init");
+    const worktree = join(s.home, "DEV", "app-wt");
+    assert.equal(g("worktree", "add", "-q", worktree, "-b", "feat/x").status, 0);
+    if (!trusted) writeFileSync(join(s.home, ".config", "skuizops", "trusted-projects"), "");
+    const run = (dir) => spawnSync("node", [script, "notice"], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: dir }, input: "{}", encoding: "utf8" });
+    return { s, worktree, run };
+  }
+
+  it("reads the main worktree's manifest but does not inherit its trust", () => {
+    const { s, worktree, run } = withWorktree({ trusted: true });
+    assert.equal(run(s.project).stdout, "");
+    const rows = check({ project: worktree, home: s.home, env: s.env });
+    assert.equal(rows.find((r) => r.name === "git hooks").status, "ok");
+    assert.equal(rows.find((r) => r.name === "project guards").status, "ok");
+    assert.equal(rows.find((r) => r.name === "trusted project").status, "fail");
+    assert.doesNotMatch(run(worktree).stdout, /manifest/);
+  });
+
+  it("still reports a worktree of an untrusted repo", () => {
+    const { worktree, run } = withWorktree({ trusted: false });
+    assert.match(run(worktree).stdout, /trusted project/);
+  });
 });

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { commandViolation, editViolation } from "./path-guard.mjs";
+import { commandViolation, editViolation, patchPaths } from "./path-guard.mjs";
 
 const env = { HOME: "/Users/ada" };
 const project = "/Users/ada/DEV/app";
@@ -320,4 +320,36 @@ describe("lemon edits with Edit or Write", () => {
     assert.equal(hook().status, 0);
     assert.equal(hook("skuizops:lemon").status, 2);
   });
+});
+
+describe("apply_patch (Codex)", () => {
+  const script = fileURLToPath(new URL("./path-guard.mjs", import.meta.url));
+  const run = (patch) =>
+    spawnSync("node", [script], {
+      input: JSON.stringify({ cwd: project, tool_name: "apply_patch", tool_input: { command: `*** Begin Patch\n${patch}\n*** End Patch` } }),
+      env: { ...process.env, HOME: "/Users/ada", CLAUDE_PROJECT_DIR: project },
+      encoding: "utf8",
+    });
+  it("blocks Update File on a protected file", () => {
+    const r = run("*** Update File: .githooks/pre-commit\n@@\n-x\n+y");
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /\.githooks/);
+  });
+  it("blocks Add File on a protected file", () => assert.equal(run("*** Add File: .githooks/new\n+x").status, 2));
+  it("blocks Delete File on a protected file", () => assert.equal(run("*** Delete File: .githooks/pre-commit").status, 2));
+  it("blocks Move to a protected target", () => assert.equal(run("*** Update File: src/a.ts\n*** Move to: .githooks/a.ts\n@@\n-x\n+y").status, 2));
+  it("allows a patch on a normal file", () => assert.equal(run("*** Update File: src/a.ts\n@@\n-x\n+y").status, 0));
+  it("blocks a multi-file patch when only the second file is protected", () =>
+    assert.equal(run("*** Update File: src/a.ts\n@@\n-x\n+y\n*** Update File: .githooks/pre-commit\n@@\n-x\n+y").status, 2));
+  it("blocks an indented header on a protected file", () => assert.equal(run("  *** Update File: .githooks/pre-commit\n@@\n-x\n+y").status, 2));
+  it("blocks apply_patch run from the shell on a protected file", () => {
+    const r = spawnSync("node", [script, "bash"], {
+      input: JSON.stringify({ cwd: project, tool_name: "Bash", tool_input: { command: "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: .githooks/pre-commit\n@@\n-x\n+y\n*** End Patch\nEOF" } }),
+      env: { ...process.env, HOME: "/Users/ada", CLAUDE_PROJECT_DIR: project },
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 2);
+  });
+  it("extracts all four header kinds, relative paths resolved against cwd", () =>
+    assert.deepEqual(patchPaths("*** Add File: a\n*** Update File: /b\n*** Move to: c\n*** Delete File: d", "/w"), ["/w/a", "/b", "/w/c", "/w/d"]));
 });
