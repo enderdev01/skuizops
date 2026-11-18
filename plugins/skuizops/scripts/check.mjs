@@ -1,5 +1,6 @@
 // Read-only check of a project's skuizops configuration. Never writes, creates or deletes a file.
-//   node check.mjs           print one row per check (ok / FAIL -> fix / info), exit 1 when any is FAIL (/skuizops:check)
+//   node check.mjs           print one row per check (ok / FAIL -> fix / info), exit 1 when any is FAIL
+//   node check.mjs report    same rows, always exit 0 (/skuizops:check: a non-zero exit shows as "Shell command failed")
 //   node check.mjs notice    SessionStart hook: one line only when a check FAILs; never fails the session
 //   a trailing `codex` argument (host) skips the Claude-only checks: plugin installed/enabled, default agent
 import { spawnSync } from "node:child_process";
@@ -9,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sources } from "./install-hooks.mjs";
-import { inScope, isMain, isTrusted, mainWorktree, projectDir } from "./scope.mjs";
+import { inScope, isMain, isTrusted, mainWorktree, projectDir, real } from "./scope.mjs";
 
 const ID = "skuizops@juicebar";
 const LEMON = "skuizops:lemon";
@@ -102,6 +103,14 @@ function oldNames(project, home, { settings }, installed) {
   return found;
 }
 
+// A session opened in a subfolder of a repo reads that folder's settings, hooks and trust, not the repo's.
+function rootRow(project) {
+  const r = spawnSync("git", ["-C", project, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const top = r.status === 0 ? r.stdout.trim() : "";
+  if (!top || real(top) === real(project)) return [];
+  return [fail("project root", `this session runs in a subfolder of the repo: start it from the repo root (cd '${top.replace(/'/g, `'\\''`)}'). The other rows are checked for this subfolder.`)];
+}
+
 // Returns one row per check: { status: "ok" | "fail" | "info", name, text }.
 // host "codex" skips the Claude-only rows (plugin installed/enabled, default agent).
 export function check({ project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)), host = "claude" }) {
@@ -112,6 +121,7 @@ export function check({ project, home = homedir(), env = process.env, pluginRoot
   const old = oldNames(project, home, config, installed);
   const claudeOnly = host === "codex" ? [] : [pluginRow(home, project, version), agentRow(config, pluginRoot)];
   return [
+    ...rootRow(project),
     ...claudeOnly,
     hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
     guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
@@ -141,7 +151,7 @@ function main() {
       return;
     }
     process.stdout.write(`${rows.map(format).join("\n")}\n`);
-    if (rows.some((r) => r.status === "fail")) process.exitCode = 1;
+    if (process.argv[2] !== "report" && rows.some((r) => r.status === "fail")) process.exitCode = 1;
   } catch (error) {
     if (!quiet) {
       process.stderr.write(`skuizops: ${error.message}\n`);

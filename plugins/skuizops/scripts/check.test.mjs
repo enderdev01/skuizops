@@ -53,6 +53,21 @@ describe("check", () => {
     assert.equal(run.status, 0, run.stdout);
   });
 
+  it("flags a session opened in a subfolder of the repo, and report mode still exits 0", () => {
+    const s = sandbox();
+    assert.equal(s.row("project root"), undefined);
+    const sub = join(s.project, "Game");
+    mkdirSync(sub);
+    const root = check({ project: sub, home: s.home, env: s.env }).find((r) => r.name === "project root");
+    assert.equal(root.status, "fail");
+    assert.match(root.text, new RegExp(`cd '${s.project}'`));
+    const run = (...args) => spawnSync("node", [script, ...args], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: sub }, encoding: "utf8" });
+    assert.equal(run().status, 1);
+    const report = run("report");
+    assert.equal(report.status, 0);
+    assert.match(report.stdout, /^FAIL project root/m);
+  });
+
   it("fails the old default agent with the fix and lists it as a leftover", () => {
     const s = sandbox();
     s.setAgent("dev-factory:lemon");
