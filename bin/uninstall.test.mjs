@@ -299,6 +299,15 @@ describe("uninstall end to end", () => {
     assert.ok(calls.includes("plugin uninstall skuizops@juicebar"));
     assert.ok(calls.includes("plugin marketplace remove juicebar"));
   });
+  it("run from a subfolder: also removes lemon and the output style there, and lists them in the plan", async () => {
+    const { root, lines, go } = setup();
+    const sub = join(root, "Game");
+    settingsOf(sub, JSON.stringify({ agent: "skuizops:lemon", outputStyle: "brief", model: "y" }));
+    assert.equal(await go({ cwd: sub, isTTY: true, ask: async () => "y" }), 0);
+    assert.deepEqual(read(sub), { model: "y" });
+    assert.deepEqual(read(root), { model: "x" });
+    assert.ok(lines.some((l) => l.includes(`${sub}/.claude/settings.json`)));
+  });
 });
 
 describe("uninstall flow", () => {
