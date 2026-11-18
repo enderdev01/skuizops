@@ -53,19 +53,29 @@ describe("check", () => {
     assert.equal(run.status, 0, run.stdout);
   });
 
-  it("flags a session opened in a subfolder of the repo, and report mode still exits 0", () => {
+  it("checks a session opened in a subfolder against the repo root, and the agent against the subfolder", () => {
     const s = sandbox();
     assert.equal(s.row("project root"), undefined);
     const sub = join(s.project, "Game");
     mkdirSync(sub);
-    const root = check({ project: sub, home: s.home, env: s.env }).find((r) => r.name === "project root");
-    assert.equal(root.status, "fail");
-    assert.match(root.text, new RegExp(`cd '${s.project}'`));
+    const rows = () => check({ project: s.project, session: sub, home: s.home, env: s.env });
+    const row = (name) => rows().find((r) => r.name === name);
+    assert.equal(row("project root").status, "info");
+    for (const name of ["git hooks", "project guards", "trusted project"]) assert.equal(row(name).status, "ok", name);
+    const agent = row("default agent");
+    assert.equal(agent.status, "fail");
+    assert.ok(agent.text.includes(`${sub}/.claude/settings.json`));
+    mkdirSync(join(sub, ".claude"));
+    writeFileSync(join(sub, ".claude", "settings.json"), JSON.stringify({ agent: "skuizops:lemon" }));
+    assert.equal(row("default agent").status, "ok");
+    rmSync(join(sub, ".claude"), { recursive: true });
     const run = (...args) => spawnSync("node", [script, ...args], { env: { ...process.env, HOME: s.home, CLAUDE_PROJECT_DIR: sub }, encoding: "utf8" });
     assert.equal(run().status, 1);
     const report = run("report");
     assert.equal(report.status, 0);
-    assert.match(report.stdout, /^FAIL project root/m);
+    assert.match(report.stdout, /^info project root/m);
+    assert.match(report.stdout, /^ok   trusted project/m);
+    assert.match(report.stdout, /^FAIL default agent/m);
   });
 
   it("fails the old default agent with the fix and lists it as a leftover", () => {

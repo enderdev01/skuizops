@@ -90,9 +90,26 @@ export const trustHint = (dir, env = process.env) =>
     ? "this directory name contains a newline and cannot be trusted: rename it."
     : `mkdir -p ${sh(dirname(trustFile(env)))} && echo ${sh(resolve(dir))} >> ${sh(trustFile(env))}`;
 
-// The project directory a hook is running for.
-export function projectDir(input = {}) {
+// Git top level of `dir` when it sits inside a work tree, else `dir`. `dir` is resolved through symlinks first,
+// so a link resolves to its target's own repo, never to the repo that holds the link. Fails closed to `dir`.
+export function projectRoot(dir) {
+  if (!dir) return dir;
+  const actual = real(resolve(dir));
+  const r = spawnSync("git", ["-C", actual, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  const top = r.status === 0 ? r.stdout.trim() : "";
+  if (!top || top.startsWith("--")) return dir;
+  const root = real(top);
+  return under(fold(actual), fold(root)) ? root : dir;
+}
+
+// The folder the session was opened in, as Claude Code reports it (not resolved to the repo root).
+export function sessionDir(input = {}) {
   return process.env.CLAUDE_PROJECT_DIR ?? input.cwd ?? process.cwd();
+}
+
+// The project directory a hook is running for: the git root of the session folder.
+export function projectDir(input = {}) {
+  return projectRoot(sessionDir(input));
 }
 
 // True when the module at `metaUrl` is the script node was started with.

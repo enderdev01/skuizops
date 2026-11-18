@@ -4,13 +4,13 @@
 import { execFile, spawn } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { setupCodex } from "./codex.mjs";
 import { check, format } from "../plugins/skuizops/scripts/check.mjs";
 import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
-import { isMain, isTrusted } from "../plugins/skuizops/scripts/scope.mjs";
+import { isMain, isTrusted, real } from "../plugins/skuizops/scripts/scope.mjs";
 import { trust } from "../plugins/skuizops/scripts/trust.mjs";
 
 const run = promisify(execFile);
@@ -352,6 +352,23 @@ async function main() {
     return { status: r.status, text: r.message };
   }));
 
+  // Claude Code reads .claude/settings.json only from the folder it starts in: a subfolder session needs its own copy.
+  if (root && real(cwd) !== real(root)) {
+    const sub = basename(cwd);
+    track(await step(`Lemon orchestrator (${sub})`, async () => {
+      const r = setLemonAgent(cwd);
+      if (r.status === "fail") throw new Error(r.message);
+      if (r.status === "ok") env.configured.push(`set lemon as the default agent in ${sub}/.claude/settings.json`);
+      return { status: r.status, text: r.message };
+    }));
+    track(await step(`Output style (${sub})`, async () => {
+      const r = setOutputStyle(cwd);
+      if (r.status === "fail") throw new Error(r.message);
+      if (r.status === "ok") env.configured.push(`turned on the brief output style in ${sub}/.claude/settings.json`);
+      return { status: r.status, text: r.message };
+    }));
+  }
+
   track(await step("Playwright",async ({ pause }) => {
     const pkg = readPackage(project);
     if (!hasWebUi(pkg)) return { status: "skip", text: "no web UI detected" };
@@ -390,7 +407,7 @@ async function main() {
 
   // Reported but not tracked: a failed check tells the human what to fix, it is not an installer error.
   await step("Check", async () => {
-    const rows = check({ project });
+    const rows = check({ project, session: cwd });
     return { status: rows.some((r) => r.status === "fail") ? "fail" : "ok", details: rows.map(format) };
   });
 

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inScope, isTrusted, mainWorktree, scopeRoots, trustHint } from "./scope.mjs";
+import { inScope, isTrusted, mainWorktree, projectDir, projectRoot, scopeRoots, sessionDir, trustHint } from "./scope.mjs";
 
 const env = { HOME: "/Users/ada" };
 
@@ -111,6 +111,51 @@ describe("linked worktrees", () => {
     writeFileSync(join(x, ".git"), `gitdir: ${admin}\n`);
     assert.notEqual(mainWorktree(x), main);
     assert.equal(isTrusted(x, env), false);
+  });
+});
+
+describe("projectRoot", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "root-")));
+  const env = { HOME: base };
+  const init = (dir) => {
+    mkdirSync(dir, { recursive: true });
+    spawnSync("git", ["-C", dir, "-c", "core.hooksPath=/dev/null", "init", "-q"], { encoding: "utf8" });
+  };
+  const outer = join(base, "outer");
+  const sub = join(outer, "Game");
+  const nested = join(sub, "inner");
+  const other = join(base, "other");
+  const target = join(other, "pkg");
+  init(outer);
+  init(nested);
+  init(other);
+  mkdirSync(target);
+  symlinkSync(target, join(outer, "link"));
+  mkdirSync(join(base, ".config", "skuizops"), { recursive: true });
+  writeFileSync(join(base, ".config", "skuizops", "trusted-projects"), `${outer}\n`);
+
+  it("returns the repo root for a subfolder", () => assert.equal(projectRoot(sub), outer));
+  it("returns the dir itself outside git", () => {
+    const plain = realpathSync(mkdtempSync(join(tmpdir(), "plain-")));
+    assert.equal(projectRoot(plain), plain);
+  });
+  it("returns the nested repo, not the outer one", () => assert.equal(projectRoot(nested), nested));
+  it("resolves a symlink to its target's own repo", () => assert.equal(projectRoot(join(outer, "link")), other));
+  it("makes a subfolder trusted only through the listed root", () => {
+    assert.equal(isTrusted(projectRoot(sub), env), true);
+    assert.equal(isTrusted(projectRoot(nested), env), false);
+    assert.equal(isTrusted(projectRoot(join(outer, "link")), env), false);
+  });
+  it("projectDir resolves the session folder, sessionDir does not", () => {
+    const saved = process.env.CLAUDE_PROJECT_DIR;
+    process.env.CLAUDE_PROJECT_DIR = sub;
+    try {
+      assert.equal(projectDir(), outer);
+      assert.equal(sessionDir(), sub);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = saved;
+    }
   });
 });
 

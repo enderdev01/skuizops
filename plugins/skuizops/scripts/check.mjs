@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sources } from "./install-hooks.mjs";
-import { inScope, isMain, isTrusted, mainWorktree, projectDir, real } from "./scope.mjs";
+import { inScope, isMain, isTrusted, mainWorktree, projectDir, real, sessionDir } from "./scope.mjs";
 
 const ID = "skuizops@juicebar";
 const LEMON = "skuizops:lemon";
@@ -51,8 +51,9 @@ function pluginRow(home, project, version) {
   return ok("plugin", `v${version}`);
 }
 
-function agentRow({ settings, problem }, pluginRoot) {
-  const fix = `set "agent": "${LEMON}" in .claude/settings.json`;
+// `session` is the session folder when it differs from the repo root: Claude Code reads its settings there.
+function agentRow({ settings, problem }, pluginRoot, session) {
+  const fix = session ? `set "agent": "${LEMON}" in ${session}/.claude/settings.json (run ${INSTALL} from ${session})` : `set "agent": "${LEMON}" in .claude/settings.json`;
   if (problem) return fail("default agent", `.claude/settings.json is ${problem}: fix it, then ${fix}`);
   const agent = settings.agent;
   if (agent === undefined) return fail("default agent", `no agent is set: ${fix}`);
@@ -103,25 +104,23 @@ function oldNames(project, home, { settings }, installed) {
   return found;
 }
 
-// A session opened in a subfolder of a repo reads that folder's settings, hooks and trust, not the repo's.
-function rootRow(project) {
-  const r = spawnSync("git", ["-C", project, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  const top = r.status === 0 ? r.stdout.trim() : "";
-  if (!top || real(top) === real(project)) return [];
-  return [fail("project root", `this session runs in a subfolder of the repo: start it from the repo root (cd '${top.replace(/'/g, `'\\''`)}'). The other rows are checked for this subfolder.`)];
-}
+// Hooks, guards and trust belong to the repo root; Claude Code reads settings from the folder the session started in.
+const rootRow = (project, session) =>
+  real(project) === real(session) ? [] : [info("project root", `session in ${session}, repo root ${project}`)];
 
 // Returns one row per check: { status: "ok" | "fail" | "info", name, text }.
+// `project` is the repo root, `session` the folder the session opened in.
 // host "codex" skips the Claude-only rows (plugin installed/enabled, default agent).
-export function check({ project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)), host = "claude" }) {
+export function check({ project, session = project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)), host = "claude" }) {
   const { version } = readJson(join(pluginRoot, ".claude-plugin", "plugin.json")) ?? {};
-  const config = projectSettings(project);
+  const config = projectSettings(session);
   const { hooks, guards, installedBy } = hookProblems(project);
   const installed = readJson(join(home, ".claude", "plugins", "installed_plugins.json"))?.plugins;
   const old = oldNames(project, home, config, installed);
-  const claudeOnly = host === "codex" ? [] : [pluginRow(home, project, version), agentRow(config, pluginRoot)];
+  const where = real(project) === real(session) ? undefined : session;
+  const claudeOnly = host === "codex" ? [] : [pluginRow(home, session, version), agentRow(config, pluginRoot, where)];
   return [
-    ...rootRow(project),
+    ...rootRow(project, session),
     ...claudeOnly,
     hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
     guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
@@ -142,9 +141,10 @@ export function notice(rows) {
 function main() {
   const quiet = process.argv[2] === "notice";
   try {
-    const project = projectDir(quiet ? JSON.parse(readFileSync(0, "utf8") || "{}") : {});
+    const input = quiet ? JSON.parse(readFileSync(0, "utf8") || "{}") : {};
+    const project = projectDir(input);
     if (quiet && !inScope(project)) return;
-    const rows = check({ project, host: process.argv.includes("codex") ? "codex" : "claude" });
+    const rows = check({ project, session: sessionDir(input), host: process.argv.includes("codex") ? "codex" : "claude" });
     if (quiet) {
       const text = notice(rows);
       if (text) process.stdout.write(`${text}\n`);

@@ -5,7 +5,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { uninstallCodex } from "./codex.mjs";
@@ -212,8 +212,11 @@ export async function uninstall({ step, out, MARK, dim }, { cwd = process.cwd(),
     root = (await exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"])).stdout.trim();
   } catch {}
   const project = root ?? cwd;
+  // Run from a subfolder: the setup also wrote lemon and the output style there.
+  const sub = root && real(cwd) !== real(root) ? cwd : null;
   out("\nskuizops uninstall\n");
   for (const line of planLines(project)) out(`  ${line}`);
+  if (sub) out(`  Subfolder: remove "agent" (if skuizops:lemon) and "outputStyle" (if brief) from ${sub}/.claude/settings.json, and the unedited .claude/output-styles/brief.md`);
   out("");
   const answer = isTTY ? await ask("Uninstall skuizops? [y/N] ") : "";
   if (!isYes(answer)) {
@@ -236,6 +239,10 @@ export async function uninstall({ step, out, MARK, dim }, { cwd = process.cwd(),
   }));
   track(await step("Lemon orchestrator", async () => asStep(removeLemonAgent(project))));
   track(await step("Output style", async () => asStep(removeOutputStyle(project))));
+  if (sub) {
+    track(await step(`Lemon orchestrator (${basename(sub)})`, async () => asStep(removeLemonAgent(sub))));
+    track(await step(`Output style (${basename(sub)})`, async () => asStep(removeOutputStyle(sub))));
+  }
   track(await step("Marketplace setting", async () => asStep(removeMarketplaceEntry(home))));
   track(await step("Plugin", async () => asStep(await uninstallPlugin(exec))));
   track(await step("Marketplace", async () => asStep(await removeMarketplace(exec))));

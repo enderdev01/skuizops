@@ -5,4 +5,4 @@ allowed-tools: Bash(node:*)
 
 !`node "${CLAUDE_PLUGIN_ROOT}/scripts/check.mjs" report`
 
-Summarize the output above in a few lines: what is fine and, for each FAIL, the fix it suggests. If `project root` fails, lead with it: opening the session from the repo root usually fixes the other rows. This command only reads: do not change any file, setting or hook, and do not run any fix yourself; the human runs the fixes.
+Summarize the output above in a few lines: what is fine and, for each FAIL, the fix it suggests. The `project root` row is information only: it says the session folder differs from the repo root, which is supported. This command only reads: do not change any file, setting or hook, and do not run any fix yourself; the human runs the fixes.
