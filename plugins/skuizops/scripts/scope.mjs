@@ -1,6 +1,7 @@
 // Where the plugin's Claude Code hooks are active. The plugin is installed for the whole user,
 // but its hooks only act on projects under ~/DEV plus any roots added with SKUIZOPS_ROOTS,
 // a ":"-separated list of absolute paths. The variable adds roots, it never replaces ~/DEV.
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +42,35 @@ export function trustFile(env = process.env) {
   return join(env.HOME ?? "", ".config", "skuizops", "trusted-projects");
 }
 
+// { top, main } of the git work tree holding `dir`, or null outside git. `main` is the main worktree root:
+// for a linked worktree (git worktree add) the parent of the common .git dir, else `top` itself.
+// A linked worktree only counts when git structures owned by the main repo vouch for it: its admin dir must be
+// <common>/worktrees/<name>, and that dir's own `gitdir` back-pointer must name <top>/.git. Nothing inside the candidate
+// directory is believed (a forged .git file + commondir + gitdir all live there). Used only to find the untracked manifest, never for trust.
+function layout(dir) {
+  const r = spawnSync("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], { encoding: "utf8" });
+  const [top, gitDir, common] = r.status === 0 ? r.stdout.split("\n") : [];
+  if (!top || !gitDir || !common) return null;
+  // git < 2.31 does not know --path-format and echoes the flag back: fail closed.
+  // shortcut: no unit test (needs a git < 2.31 binary or an injected spawn), add one if layout() gains an injectable runner.
+  if ([top, gitDir, common].some((l) => l.startsWith("--"))) return null;
+  if (gitDir === common || basename(common) !== ".git") return { top, main: top };
+  try {
+    const worktrees = join(common, "worktrees");
+    if (real(dirname(gitDir)) !== real(worktrees)) return { top, main: top };
+    const backPointer = readFileSync(join(worktrees, basename(gitDir), "gitdir"), "utf8").trim();
+    if (real(backPointer) !== real(join(top, ".git"))) return { top, main: top };
+  } catch {
+    return { top, main: top };
+  }
+  return { top, main: dirname(common) };
+}
+
+export const mainWorktree = (dir) => (dir ? layout(dir)?.main ?? null : null);
+
 // Exact match only, compared through symlinks: a trusted folder does not trust the projects inside it.
+// A linked worktree is not trusted through its main worktree: every inheritance check we tried could be forged
+// from inside the candidate directory, so each worktree is trusted on its own with /skuizops:trust.
 export function isTrusted(dir, env = process.env) {
   if (!dir || dir.includes("\n")) return false;
   let roots;

@@ -48,6 +48,19 @@ describe("isNewer", () => {
   });
 });
 
+describe("update check, codex host", () => {
+  it("prints nothing even when claude would print a notice", () => {
+    const script = new URL("./update-check.mjs", import.meta.url).pathname;
+    const dir = tmp("update-repo");
+    mkdirSync(join(dir, "plugins", "skuizops", ".claude-plugin"), { recursive: true });
+    writeFileSync(join(dir, MANIFEST), JSON.stringify({ version: "999.0.0" }));
+    const h = home({ source: { source: "directory", path: dir }, installLocation: dir });
+    const out = (...args) => spawnSync("node", [script, ...args], { env: { ...process.env, HOME: h }, encoding: "utf8" }).stdout;
+    assert.match(out(), /999\.0\.0/);
+    assert.equal(out("codex"), "");
+  });
+});
+
 describe("update check, directory source", () => {
   const repo = (version) => {
     const dir = tmp("update-repo");
