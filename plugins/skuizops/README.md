@@ -13,7 +13,7 @@ A Claude Code and OpenAI Codex CLI plugin that makes agents check their own work
 | `lemon` | Session model | Orchestrator: the main session in set-up projects, delegates on its own |
 | `cherry` | Sonnet (Opus for risky changes) | Inspector: independently verifies a change, with evidence |
 
-Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`.
+Skills: `verify`, `push-up-the-ladder`, `create-verification-skill`, `maintain-verification-skill`, `show-your-work`, `lemon-mode`. Claude and Codex both load `skills/`.
 Hooks: branch guard on Bash, a protected-files guard on Edit, Write and Bash, a commit-msg guard that rejects AI attribution, ESLint on edited files (when the project has it), and a Stop gate that runs the project's verify.
 
 Parallel sessions: a SessionStart hook (`scripts/sessions.mjs`) registers each session in `<git common dir>/skuizops-sessions`. When another live session started earlier in the same checkout, the new one is told to do all its changes in its own git worktree from the default branch. Nothing is blocked. A session is dead after 12 hours without a tool call, and more than 4 live sessions on a repository add a warning.
@@ -22,7 +22,9 @@ Update notice: a SessionStart hook (`scripts/update-check.mjs`) compares the ins
 
 Leftovers notice: a SessionStart hook (`scripts/leftovers.mjs`) lists what earlier sessions left in the checkout (installer backups `*.local-<timestamp>`, local branches merged into the remote default branch, merged clean worktrees) and tells lemon to ask the human whether to clean them. It never deletes anything and makes no network call.
 
-The Stop gate runs verify once per tree state: it records what it verified in the git directory (the commit on a clean tree, else a hash of the commit, the diff against it and the untracked files) and skips while nothing changed. Ignored files do not count as a change. If verify still fails on the second stop of a turn, you get a warning instead of a second block. A verify that runs longer than four minutes counts as a failure.
+The Stop gate runs verify once per tree state: it records what it verified in the git directory (the commit on a clean tree, else a hash of the commit, the diff against it and the untracked files) and skips while nothing changed. A passing full `node scripts/control.mjs verify` records that same marker, so mango, cherry and the gate share one pass; `verify --changed` never records it. Ignored files do not count as a change. If verify still fails on the second stop of a turn, you get a warning instead of a second block. A verify that runs longer than four minutes counts as a failure.
+
+Lemon writes `.skuizops/plan.md` before it delegates (a trivial change may skip the file, never the predicate): the goal in its own words, one falsifiable done-predicate, and small units. The decision log is `.skuizops/decisions.tsv`, append-only and gitignored. Cherry's finish checks are that predicate plus at most 2 to 4 feature-map rows that match the diff and the request. A PASS is tied to `git patch-id`, so committing the same patch does not re-run cherry. Lemon stops at the open PR. A later autopilot would merge only when CI is green on that head and the PASS patch-id still matches; this plugin does not merge.
 
 The commit-msg guard rejects any `<something>-by:` trailer that names an AI tool, lines like "generated with" or "written by" an AI tool, and commits whose author or committer email belongs to one. It checks the email, not the name, so a person called Claude can commit. Lines that start with `#` are checked too, and everything after git's scissors line (the diff of `git commit -v`) is ignored.
 

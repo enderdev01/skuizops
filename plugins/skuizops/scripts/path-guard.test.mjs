@@ -308,8 +308,8 @@ describe("lemon edits with Edit or Write", () => {
   for (const c of ["python3 - <<'EOF'\np='src/a.ts'\nopen(p,'w').write('x')\nEOF", "sed -i '' s/a/b/ src/a.ts"]) {
     it(`blocks ${c}`, () => assert.match(run(c), /lemon edits files with Edit or Write \(apply_patch in Codex\)/));
   }
-  for (const c of ["echo x > $TMPDIR/a.txt", "cat > /private/tmp/claude-501/x/pr-body.md <<'EOF'\nbody\nEOF", "git commit -m x && git push -u origin fix/x",
-    "gh pr create --body-file /private/tmp/claude-501/x/pr-body.md", "pnpm install", "node scripts/control.mjs verify", 'git worktree add "$(mktemp -d)" HEAD',
+  for (const c of ["echo x > $TMPDIR/a.txt", "cat > /tmp/claude-501/x/pr-body.md <<'EOF'\nbody\nEOF", "git commit -m x && git push -u origin fix/x",
+    "gh pr create --body-file /tmp/claude-501/x/pr-body.md", "pnpm install", "node scripts/control.mjs verify", 'git worktree add "$(mktemp -d)" HEAD',
     "git merge --no-ff feat/x"]) {
     it(`allows ${c}`, () => assert.equal(run(c), null));
   }

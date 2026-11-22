@@ -15,7 +15,7 @@ Never invent an expected output: observe it by running the command.
 1. Run `node scripts/control.mjs doctor`. If it fails, report it and stop.
 2. For every row in `.claude/verification/features/README.md`: run its command and compare the output with the expected table in the feature's file.
    - Output differs because the feature changed: update the expected table with the observed output.
-   - Row marked `manual verification` (canvas/3D scenes without a reproducible command): do not run it; check its steps still match the code.
+   - Row marked `manual verification` (canvas/3D or Unity scenes without a reproducible command): do not run it; check its steps still match the code, and that the details file still names the scene and what must be visible. A blank-screenshot note stays a manual row.
    - Command no longer runs: fix the command in the README (and `scripts/control.mjs` if the subcommand is stale), or remove the row if the feature is gone.
 3. Ask kiwi to find user-facing features in the code that are missing from the map, including canvas/3D scenes (cover them as `create-verification-skill` step 3 says). For each: add a subcommand to `scripts/control.mjs` if needed, a row in the README, and a feature file filled with observed input and output.
 4. Remove features, rows and files for features that no longer exist in the code.

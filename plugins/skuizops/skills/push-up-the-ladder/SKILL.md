@@ -5,6 +5,8 @@ description: Turn a review correction into the highest-leverage guarantee. Use w
 
 # Push up the ladder
 
+Lemon runs this once, after the last FAIL of a change: the failure a later PASS fixed, or the second FAIL that stops the loop. It does not run between cherry rounds, and a check it adds does not start another round.
+
 A correction fixed only in one line will come back. Move it as high as it can go:
 
 1. **Codebase** — can the bad pattern become impossible? (a type that cannot hold the wrong value, a module boundary, a narrower API)

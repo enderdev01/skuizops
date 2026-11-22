@@ -1,6 +1,6 @@
 {
   "name": "skuizops",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Agent factory: lemon orchestrator with kiwi, fig, mango and cherry agents, verification skills, a branch policy guard and lint/verify hooks.",
   "author": { "name": "skuizops" }
 }

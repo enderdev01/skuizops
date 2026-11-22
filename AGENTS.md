@@ -30,3 +30,4 @@ Keep this file short. A rule belongs here only if no type, lint, test or archite
 - The plugin `plugins/skuizops` has zero dependencies: Node built-ins only (tests use `node:test`).
 - Commits and PRs are authored by the human only: no `Co-Authored-By` AI trailers or "Generated with" footers. The `commit-msg` hook rejects them.
 - When a reviewer corrects you, follow the `push-up-the-ladder` skill instead of only fixing the line.
+- Before non-trivial work, lemon restates the goal and writes `.skuizops/plan.md` with a falsifiable done-predicate and ordered units. A trivial change may skip the file, never the predicate. See `plugins/skuizops/agents/lemon.md`.

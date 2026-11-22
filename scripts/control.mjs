@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commitViolation } from "../plugins/skuizops/scripts/branch-guard.mjs";
-import { trustFile } from "../plugins/skuizops/scripts/scope.mjs";
+import { isMain, trustFile } from "../plugins/skuizops/scripts/scope.mjs";
+import { recordedState, recordState, treeState } from "../plugins/skuizops/scripts/verify-gate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const argv = process.argv.slice(2);
@@ -18,6 +19,10 @@ const HELP = `Usage: node scripts/control.mjs <command> [--json]
 Commands:
   doctor    Check node, git hooks and the current branch
   verify    Run plugin tests, validate the marketplace and the plugin, syntax-check every .mjs
+            Skips when this tree was already verified (the Stop gate's marker). A passing full run records it
+  verify --changed [path...]
+            Same checks, only for those paths (or the diff against the merge-base, plus untracked files).
+            Does not record the tree: a filtered pass is not the full suite
   bench     Run each guard and the Stop gate as their hooks do, in a throwaway repo on "main": verdict, message, median latency
 
 Every command exits 0 on success and 1 on failure. Add --json for machine-readable output.`;
@@ -43,6 +48,13 @@ function runAsync(cmd, cmdArgs) {
 function report(ok, data, text) {
   process.stdout.write(json ? `${JSON.stringify({ ok, ...data }, null, 2)}\n` : `${text}\n`);
   process.exit(ok ? 0 : 1);
+}
+
+// `node --test <directory>` does not expand a directory on every Node build, so name the files.
+function testFiles(dir) {
+  return readdirSync(join(root, dir))
+    .filter((name) => name.endsWith(".test.mjs"))
+    .map((name) => join(dir, name));
 }
 
 function mjsFiles(dir) {
@@ -77,7 +89,100 @@ function doctor() {
   report(checks.every((c) => c.ok), { checks }, text);
 }
 
-async function verify() {
+// `--changed` keeps a path only when it can fail one of the checks below. Docs and other files add no step.
+const AREA_TESTS = [
+  ["plugins/skuizops/scripts/lemon-agent.test.mjs", (f) => f.startsWith("plugins/skuizops/agents/") || f.startsWith("plugins/skuizops/skills/")],
+  ["plugins/skuizops/scripts/orchestration.test.mjs", (f) => f.startsWith("plugins/skuizops/agents/") || f.startsWith("plugins/skuizops/skills/")],
+  ["plugins/skuizops/scripts/hooks-json.test.mjs", (f) => /(^|\/)hooks\/[^/]+\.json$/.test(f) || f.endsWith("plugin.json")],
+  ["plugins/skuizops/scripts/template-control.test.mjs", (f) => f.endsWith("templates/control.mjs") || f === "scripts/control.mjs"],
+  ["plugins/skuizops/scripts/control-changed.test.mjs", (f) => f === "scripts/control.mjs"],
+  ["plugins/skuizops/scripts/verify-gate.test.mjs", (f) => f.includes("verify-gate")],
+  ["plugins/skuizops/scripts/decisions.test.mjs", (f) => f.includes("show-your-work") || f.endsWith("decisions.mjs")],
+];
+
+export function parseVerifyArgs(lineArgs) {
+  const paths = [];
+  let changed = false;
+  for (const arg of lineArgs) {
+    if (arg === "--changed") changed = true;
+    else if (arg === "--") continue;
+    else if (arg.startsWith("--")) return { error: `unknown verify flag "${arg}"` };
+    else paths.push(arg);
+  }
+  return { changed, paths };
+}
+
+// null when git cannot say. Otherwise paths changed since the merge-base (working tree, so staged and unstaged) plus untracked files.
+export function changedPaths(cwd) {
+  const git = (...a) => spawnSync("git", a, { cwd, encoding: "utf8" });
+  const base = ["origin/HEAD", "origin/main", "origin/develop", "origin/master"]
+    .map((ref) => git("merge-base", "HEAD", ref))
+    .find((r) => r.status === 0 && r.stdout.trim());
+  const diff = git("diff", "--name-only", base ? base.stdout.trim() : "HEAD");
+  const untracked = git("ls-files", "--others", "--exclude-standard");
+  if (diff.status !== 0 || untracked.status !== 0) return null;
+  return [...new Set(`${diff.stdout}\n${untracked.stdout}`.split("\n").map((s) => s.trim()).filter(Boolean))];
+}
+
+export function changedVerifyPlan(files, exists = (p) => existsSync(join(root, p))) {
+  const steps = [];
+  const syntax = files.filter((f) => f.endsWith(".mjs"));
+  if (syntax.length) steps.push({ step: `syntax check (${syntax.length} files)`, kind: "syntax", files: syntax });
+  const tests = new Set();
+  for (const file of files) {
+    if (file.endsWith(".test.mjs") && (file.startsWith("plugins/skuizops/scripts/") || file.startsWith("bin/"))) tests.add(file);
+    else if (file.endsWith(".mjs")) {
+      const sibling = file.replace(/\.mjs$/, ".test.mjs");
+      if (exists(sibling)) tests.add(sibling);
+    }
+  }
+  for (const [test, when] of AREA_TESTS) if (files.some(when) && exists(test)) tests.add(test);
+  const testFiles = [...tests];
+  if (testFiles.length) steps.push({ step: `tests (${testFiles.length} files)`, kind: "test", files: testFiles });
+  if (files.some((f) => f.endsWith("marketplace.json"))) steps.push({ step: "validate marketplace", kind: "validate-marketplace" });
+  if (files.some((f) => f.startsWith("plugins/skuizops/.claude-plugin/") || f.startsWith("plugins/skuizops/.codex-plugin/"))) {
+    steps.push({ step: "validate plugin", kind: "validate-plugin" });
+  }
+  return steps;
+}
+
+function formatSteps(steps) {
+  return steps
+    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} (${s.ms}ms)${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
+    .join("\n");
+}
+
+async function runPlan(plan) {
+  const steps = [];
+  for (const step of plan) {
+    if (step.kind === "syntax") {
+      const start = Date.now();
+      const syntax = await Promise.all(step.files.map((f) => runAsync("node", ["--check", f])));
+      steps.push({ step: step.step, ok: syntax.every((s) => s.ok), ms: Date.now() - start, output: syntax.map((s) => s.output).filter(Boolean).join("\n") });
+    } else if (step.kind === "test") steps.push({ step: step.step, ...(await runAsync("node", ["--test", ...step.files])) });
+    else if (step.kind === "validate-marketplace") steps.push({ step: step.step, ...(await runAsync("claude", ["plugin", "validate", root])) });
+    else if (step.kind === "validate-plugin") steps.push({ step: step.step, ...(await runAsync("claude", ["plugin", "validate", join(root, "plugins", "skuizops")])) });
+  }
+  return steps;
+}
+
+async function verify(lineArgs = []) {
+  const parsed = parseVerifyArgs(lineArgs);
+  if (parsed.error) report(false, { error: parsed.error }, `FAIL ${parsed.error}  ->  see: node scripts/control.mjs --help`);
+  if (!parsed.changed) {
+    const state = treeState(root);
+    if (state && recordedState(root) === state) report(true, { skipped: "tree already verified" }, "ok  verify (tree already verified, skipped)");
+  }
+  if (parsed.changed) {
+    const files = parsed.paths.length ? parsed.paths : changedPaths(root);
+    if (!files) report(false, { error: "could not list changed paths" }, "FAIL verify --changed could not list changed paths  ->  pass the paths, or run verify");
+    const plan = changedVerifyPlan(files);
+    if (plan.length === 0) report(true, { changed: files, steps: [] }, "ok  verify --changed (no checks for these paths)");
+    const steps = await runPlan(plan);
+    const text = formatSteps(steps);
+    report(steps.every((s) => s.ok), { changed: files, steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
+  }
+  const before = treeState(root);
   const files = [...mjsFiles("plugins"), ...mjsFiles("scripts"), ...mjsFiles("bin")];
   const start = Date.now();
   const syntaxStep = Promise.all(files.map((f) => runAsync("node", ["--check", f]))).then((syntax) => ({
@@ -87,17 +192,16 @@ async function verify() {
   }));
   const names = ["plugin tests", "bin tests", "validate marketplace", "validate plugin", `syntax check (${files.length} files)`];
   const results = await Promise.all([
-    runAsync("node", ["--test", "plugins/skuizops/scripts/"]),
-    runAsync("node", ["--test", "bin/"]),
+    runAsync("node", ["--test", ...testFiles("plugins/skuizops/scripts")]),
+    runAsync("node", ["--test", ...testFiles("bin")]),
     runAsync("claude", ["plugin", "validate", root]),
     runAsync("claude", ["plugin", "validate", join(root, "plugins", "skuizops")]),
     syntaxStep,
   ]);
   const steps = results.map((r, i) => ({ step: names[i], ...r }));
-  const text = steps
-    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} (${s.ms}ms)${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
-    .join("\n");
-  report(steps.every((s) => s.ok), { steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
+  const ok = steps.every((s) => s.ok);
+  if (ok && before && treeState(root) === before) recordState(root, before);
+  report(ok, { steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, formatSteps(steps));
 }
 
 // Each case is one real hook invocation: [guard script, mode, what the agent tried, expect a block?].
@@ -184,11 +288,13 @@ function bench() {
   report(rows.every((r) => r.ok), { runs: BENCH_RUNS, node: process.versions.node, rows }, `${text}\n\nmedian of ${BENCH_RUNS} runs per case, node ${process.versions.node}`);
 }
 
-const [command] = args;
-if (command === "doctor") doctor();
-else if (command === "verify") await verify();
-else if (command === "bench") bench();
-else {
-  process.stdout.write(`${HELP}\n`);
-  process.exit(command && command !== "--help" && command !== "help" ? 1 : 0);
+if (isMain(import.meta.url)) {
+  const [command, ...rest] = args;
+  if (command === "doctor") doctor();
+  else if (command === "verify") await verify(rest);
+  else if (command === "bench") bench();
+  else {
+    process.stdout.write(`${HELP}\n`);
+    process.exit(command && command !== "--help" && command !== "help" ? 1 : 0);
+  }
 }

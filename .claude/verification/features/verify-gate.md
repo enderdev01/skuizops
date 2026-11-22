@@ -18,3 +18,4 @@ Exercise: `node scripts/control.mjs verify` runs `verify-gate.test.mjs`; all cas
 
 - Not a git repo: still runs verify and blocks on failure.
 - New commit after a recorded pass: verifies again.
+- A passing full `node scripts/control.mjs verify` writes the same marker, so the next stop on that tree skips. `verify --changed` does not write it. Observed skip line when the marker already matches: `ok  verify (tree already verified, skipped)`.
