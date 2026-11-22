@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
-import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation, targetDir } from "./branch-guard.mjs";
+import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation } from "./branch-guard.mjs";
 
 describe("isProtected", () => {
   for (const ref of ["develop", "desarrollo", "desa", "main", "master", "production", "prod", "test", "release", "release/1.2", "refs/heads/main", "MAIN"]) {
@@ -206,6 +206,132 @@ describe("checkCommand: after the trust list check moved to path-guard bash", ()
     ]) {
       it(`blocks bypass: ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, S), /blocked/));
     }
-    it("returns the -C path unnormalized (symlinks)", () => assert.equal(targetDir("git -C ../wt/lnk/.. commit -m x"), "../wt/lnk/.."));
+    it("passes the -C path unnormalized (symlinks)", () => {
+      const seen = [];
+      checkCommand("git -C ../wt/lnk/.. commit -m x", S, (d) => (seen.push(d), "fix/x"));
+      assert.deepEqual(seen, ["../wt/lnk/.."]);
+    });
   });
+});
+
+describe("issue 61/63: text is data, each git is judged by its own dir", () => {
+  const at = (d) => ({ "/abs/wt": "fix/x", "/abs/repo": "develop", "../wt": "fix/x", "../repo": "develop" })[d] ?? null;
+  const run = (cmd, branch = "develop") => checkCommand(cmd, branch, at);
+  const on = (branch) => (branch ? ` on ${branch}` : "");
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)}${on(branch)}`, () => assert.equal(run(cmd, branch), null));
+  const blocked = (cmd, branch, re = /blocked|forbidden/) => it(`blocks ${JSON.stringify(cmd)}${on(branch)}`, () => assert.match(run(cmd, branch) ?? "allowed", re));
+
+  // #61 table (session on develop, worktree /abs/wt on fix/x)
+  allowed("cat > /tmp/x.md <<'EOF'\n# notes\ngit commit -m x\ngit push origin main\nEOF");
+  allowed('echo "remember to git commit"');
+  allowed("cat > /tmp/pr.md <<'EOF'\nRun git commit; then git push origin main | tee.\nEOF\ngh pr create --title t --body-file /tmp/pr.md");
+  allowed("cat > /tmp/pr.md <<'EOF' && gh pr create --title t --body-file /tmp/pr.md\nRun git commit; then git push origin main.\nEOF");
+  allowed("cat > /tmp/re.mjs <<'EOF'\nconst re = /git commit|git push|git merge/;\nEOF");
+  allowed("W=/abs/wt; git -C $W commit -m x");
+  allowed("W=/abs/wt; git -C /abs/wt merge origin/develop");
+  allowed("git fetch -q && git -C /abs/wt merge origin/develop");
+  allowed("git -C /abs/wt merge origin/develop");
+  blocked("git commit -m x");
+
+  allowed('echo "never use git commit --no-verify"');
+  allowed("echo git commit -m x");
+  allowed("tee /tmp/n.md <<'EOF'\ngit commit\nEOF");
+  allowed('W=/abs/wt; git -C "$W" commit -m x');
+  allowed("W=/abs/wt; git -C ${W} commit -m x");
+  allowed("cd /abs/wt && git add -A && git commit -m x");
+  allowed('git log --oneline | grep "git commit"');
+  allowed("git -c user.name=a -C /abs/wt commit -m x");
+
+  // #63: only -C and safe -c may precede the subcommand
+  blocked("git --bare -C /abs/wt push origin HEAD");
+  blocked("git --git-dir=/abs/repo/.git -C /abs/wt commit -m x");
+  blocked("git -p -C /abs/wt commit -m x");
+  blocked("git -c core.editor=x -C /abs/wt commit -m x");
+
+  // the dir really is protected
+  blocked("W=/abs/repo; git -C $W commit -m x", "feat/a");
+  blocked("git fetch -q && git -C /abs/repo commit -m x", "feat/a");
+  blocked("cd /abs/repo; git commit -m x", "feat/a");
+  blocked("cd /abs/wt; git commit -m x");
+  blocked("git -C /abs/wt status && cd /abs/repo && git commit -m x", "feat/a");
+  blocked("cd /abs/wt && pushd /abs/repo && git commit -m x");
+
+  // a dir that cannot be read is judged by the session branch, with a hint
+  blocked("W=/abs/wt; W=/abs/repo; git -C $W commit -m x", undefined, /literal path/);
+  blocked("git -C $UNSET commit -m x", undefined, /literal path/);
+  blocked("W=/abs/wt git -C $W commit -m x");
+  blocked('_=/abs/wt; git -C "$_" commit -m x');
+  blocked("W=/abs/wt; W+=/../repo; git -C $W commit -m x");
+  blocked("W=/abs/wt; W[1,-1]=/abs/repo; git -C $W commit -m x");
+  blocked("W=/abs/wt; read W; git -C $W commit -m x");
+  blocked("false && W=/abs/wt; git -C $W commit -m x");
+  blocked('W=/abs/wt; git -C "$W"p commit -m x');
+
+  // text that reaches a shell is still inspected
+  blocked('eval "git commit -m x"');
+  blocked('bash -c "git -C /abs/wt status; git commit -m x"');
+  blocked("printf 'git commit -m x' | sh");
+  blocked('echo "git commit -m x" | bash');
+  blocked("cat <<'EOF' | bash\ngit commit -m x\nEOF");
+  blocked("cat <<EOF > /tmp/a\n$(git commit -m x)\nEOF");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -m x\nEOF\nbash /tmp/a.sh");
+  blocked("x=$(cat <<'EOF'\ngit commit -m x\nEOF\n); eval \"$x\"");
+  blocked("tee >(bash) <<'EOF'\ngit commit -m x\nEOF");
+  blocked('echo "x" && git commit --no-verify -m x', "feat/a");
+
+  // cherry round 1: shapes where the shell runs what the parser took for data
+  blocked("cat <<<'EOF'\ngit commit -m x\nEOF");
+  blocked("cat <<EO\\F\nEOF\ngit commit -m x\nEO");
+  blocked("cat <<'EO'F\nEOF\ngit commit -m x\nEO");
+  blocked("gh config set browser 'git commit --allow-empty -m'; gh browse");
+  blocked("GH_BROWSER='git commit --allow-empty -m' gh browse");
+  blocked("printf -v x %s 'a[$(git commit -m x)]'; echo $[x]");
+
+  // cherry round 2: the same words quoted, and a continuation that forms the delimiter
+  blocked("printf '-v' x %s 'a[$(git commit -m x)]'; echo $[x]");
+  blocked('printf -""v x %s \'a[$(git commit -m x)]\'; echo $[x]');
+  blocked("gh \"config\" set browser 'git commit --allow-empty -m'; gh browse");
+  blocked("gh $'config' set browser 'git commit --allow-empty -m'; gh browse");
+  blocked("gh 'alias' set --shell gc 'git commit --allow-empty -m x'; gh gc");
+  blocked("cat <<EOF\nEO\\\nF\ngit commit -m x\nEOF");
+});
+
+// The parser approximates the shell. Wherever the two disagree, an allowed command can run git. So run each
+// command in the real shells with a `git` shim: whatever the guard allows must never reach git commit/merge/push.
+describe("issue 61/63: what the guard allows does not run git commit, merge or push in a real shell", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = mkdtempSync(join(tmpdir(), "guard-shell-"));
+  writeFileSync(join(dir, "git"), '#!/bin/sh\necho "$@" >> "$GIT_LOG"\n', { mode: 0o755 });
+  const shells = ["/bin/bash", "/bin/zsh"].filter((s) => existsSync(s));
+  const corpus = [
+    "cat > x.md <<'EOF'\n# notes\ngit commit -m x\nEOF",
+    'echo "remember to git commit"',
+    "cat > re.mjs <<'EOF'\nconst re = /git commit|git push|git merge/;\nEOF",
+    "tee n.md <<'EOF'\ngit commit\nEOF\n",
+    "cat <<-EOF\n\tgit push origin main\n\tEOF",
+    "echo hi # git commit -m x",
+    "cat <<<'EOF'\ngit commit -m x\nEOF",
+    "cat <<EO\\F\nEOF\ngit commit -m x\nEO",
+    "cat <<'EO'F\nEOF\ngit commit -m x\nEO",
+    "cat <<EOF\nEO\\\nF\ngit commit -m x\nEOF",
+    "printf -v x %s 'a[$(git commit -m x)]'; echo $[x]",
+    "printf '-v' x %s 'a[$(git commit -m x)]'; echo $[x]",
+    "cat <<'A' <<'B'\ngit commit\nA\ngit push origin main\nB",
+    "echo x; cat <<'EOF'\nEOF\ngit merge feat/x",
+  ];
+  for (const shell of shells) {
+    for (const cmd of corpus) {
+      it(`${shell}: ${JSON.stringify(cmd)}`, () => {
+        if (checkCommand(cmd, "develop") !== null) return; // blocked: nothing to prove
+        const log = join(dir, "log");
+        rmSync(log, { force: true });
+        spawnSync(shell, ["-c", cmd], { cwd: dir, env: { PATH: `${dir}:/usr/bin:/bin`, GIT_LOG: log }, encoding: "utf8" });
+        const ran = existsSync(log) ? readFileSync(log, "utf8") : "";
+        assert.doesNotMatch(ran, /^(commit|merge|push)\b/m, `allowed, but the shell ran: git ${ran}`);
+      });
+    }
+  }
 });
