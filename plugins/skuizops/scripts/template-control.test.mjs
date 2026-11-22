@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { treeState } from "./verify-gate.mjs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -324,5 +325,66 @@ describe("verify: step timeout", () => {
     const { r } = verifyIn({ CONTROL_VERIFY_TIMEOUT_MS: "abc" });
     assert.equal(r.status, 1);
     assert.match(r.stdout, /CONTROL_VERIFY_TIMEOUT_MS/);
+  });
+});
+
+function verifyProject(scripts) {
+  const dir = mkdtempSync(join(tmpdir(), "control-filter-"));
+  mkdirSync(join(dir, "scripts"));
+  copyFileSync(template, join(dir, "scripts", "control.mjs"));
+  writeFileSync(join(dir, "count.mjs"), 'import { appendFileSync } from "node:fs"; appendFileSync("ran.txt", process.argv.slice(2).join(" ") + "\\n");\n');
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts }));
+  const git = (...args) => spawnSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: dir, encoding: "utf8" });
+  const run = (...args) => spawnSync("node", ["scripts/control.mjs", "verify", ...args], { cwd: dir, encoding: "utf8" });
+  const ran = () => (existsSync(join(dir, "ran.txt")) ? readFileSync(join(dir, "ran.txt"), "utf8") : "");
+  return { dir, git, run, ran };
+}
+
+describe("verify --changed and the recorded tree", () => {
+  it("records the Stop gate's tree state and skips the next full verify", () => {
+    const { dir, git, run, ran } = verifyProject({ test: "node count.mjs test" });
+    writeFileSync(join(dir, ".gitignore"), "ran.txt\n");
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+    writeFileSync(join(dir, "dirty.txt"), "x");
+    const first = run();
+    assert.equal(first.status, 0, first.stdout);
+    assert.match(ran(), /^test\n$/);
+    assert.equal(readFileSync(join(dir, ".git", "skuizops-verified"), "utf8").trim(), treeState(dir));
+    const second = run();
+    assert.equal(second.status, 0, second.stdout);
+    assert.match(second.stdout, /tree already verified, skipped/);
+    assert.equal(ran(), "test\n");
+  });
+
+  it("forwards only matching paths and does not record a filtered pass", () => {
+    const { dir, run, ran } = verifyProject({ typecheck: "node count.mjs typecheck", lint: "node count.mjs lint", test: "node count.mjs test" });
+    const skipped = run("--changed", "README.md");
+    assert.equal(skipped.status, 0, skipped.stdout);
+    assert.match(skipped.stdout, /typecheck \(no matching paths\)/);
+    assert.match(skipped.stdout, /test \(no matching paths\)/);
+    assert.equal(ran(), "");
+    assert.equal(existsSync(join(dir, ".git", "skuizops-verified")), false);
+    const code = run("--changed", "src/app.ts");
+    assert.equal(code.status, 0, code.stdout);
+    assert.match(ran(), /typecheck src\/app\.ts/);
+    assert.match(ran(), /lint src\/app\.ts/);
+    assert.match(ran(), /test src\/app\.ts/);
+    const cs = run("--changed", "Assets/Player.cs");
+    assert.equal(cs.status, 0, cs.stdout);
+    assert.match(ran(), /test Assets\/Player\.cs/);
+    assert.doesNotMatch(ran(), /typecheck Assets\/Player\.cs/);
+    assert.equal(existsSync(join(dir, ".git", "skuizops-verified")), false);
+  });
+
+  it("fails when it cannot list paths, and rejects an unknown flag", () => {
+    const { run } = verifyProject({ test: "node -e \"process.exit(0)\"" });
+    const listed = run("--changed");
+    assert.equal(listed.status, 1);
+    assert.match(listed.stdout, /could not list changed paths/);
+    const flag = run("--nope");
+    assert.equal(flag.status, 1);
+    assert.match(flag.stdout, /unknown verify flag/);
   });
 });

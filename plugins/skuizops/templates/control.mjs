@@ -2,7 +2,8 @@
 // Verification CLI: the lever agents use to check their own work.
 // Every command supports --json. Exit 0 on success, 1 on failure.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,12 @@ Commands:
   doctor    Check the environment is ready (node, deps, git hooks, branch)
   verify    Run the project's typecheck, lint and test npm scripts that exist; report each step
             Each step is cut after 10 minutes; set CONTROL_VERIFY_TIMEOUT_MS (milliseconds) to change it
+            Skips when this tree was already verified (skuizops Stop gate marker). A passing full run records it
+  verify --changed [path...]
+            Run those scripts only for the paths given, or for the diff against the merge-base plus untracked files.
+            Typecheck and lint see JS/TS files; test also sees C# files. Other paths add no step.
+            Does not record the tree: a filtered pass is not the full suite
+            Example: node scripts/control.mjs verify --changed src/auth.ts
 
   screenshot [route] [--out <file.png>] [--wait <ms>] [--full-page] [--port <n>]
             Headless screenshot of a route of the app, "/" by default (needs APP set and Playwright installed in the project)
@@ -139,13 +146,99 @@ async function doctor() {
   report(ok, { checks }, text);
 }
 
-async function verify() {
+// Same bytes as treeState() in the plugin verify-gate. A full verify that passes records this string;
+// the Stop hook then skips. verify --changed must not record it: a filtered pass is not the suite the hook trusts.
+function gitQuiet(...args) {
+  return spawnSync("git", args, { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+}
+
+function treeState() {
+  const head = gitQuiet("rev-parse", "HEAD");
+  const status = gitQuiet("status", "--porcelain");
+  if (head.status !== 0 || status.status !== 0) return null;
+  if (status.stdout.trim() === "") return head.stdout.trim();
+  const diff = gitQuiet("diff", "HEAD", "--binary");
+  const untracked = gitQuiet("ls-files", "-z", "--others", "--exclude-standard");
+  if (diff.status !== 0 || untracked.status !== 0) return null;
+  const hash = createHash("sha256").update(head.stdout).update(diff.stdout);
+  try {
+    for (const file of untracked.stdout.split("\0").filter(Boolean)) hash.update(`\0${file}\0`).update(readFileSync(join(root, file)));
+  } catch {
+    return null;
+  }
+  return `dirty:${hash.digest("hex")}`;
+}
+
+function markerPath() {
+  const found = gitQuiet("rev-parse", "--git-path", "skuizops-verified");
+  if (found.status !== 0) return null;
+  const rel = found.stdout.trim();
+  return rel ? resolve(root, rel) : null;
+}
+
+function recordedState() {
+  const marker = markerPath();
+  if (!marker) return null;
+  try {
+    return readFileSync(marker, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function recordState(state) {
+  const marker = markerPath();
+  if (!marker || !state) return;
+  try {
+    writeFileSync(marker, `${state}\n`);
+  } catch {}
+}
+
+const CODE_FILE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+
+function parseVerifyArgs(lineArgs) {
+  const paths = [];
+  let changed = false;
+  for (const arg of lineArgs) {
+    if (arg === "--changed") changed = true;
+    else if (arg === "--") continue;
+    else if (arg.startsWith("--")) return { error: `unknown verify flag "${arg}"` };
+    else paths.push(arg);
+  }
+  return { changed, paths };
+}
+
+// null when git cannot say. Paths are relative to the project.
+function changedPaths() {
+  const base = ["origin/HEAD", "origin/main", "origin/develop", "origin/master"]
+    .map((ref) => gitQuiet("merge-base", "HEAD", ref))
+    .find((r) => r.status === 0 && r.stdout.trim());
+  const diff = gitQuiet("diff", "--name-only", base ? base.stdout.trim() : "HEAD");
+  const untracked = gitQuiet("ls-files", "--others", "--exclude-standard");
+  if (diff.status !== 0 || untracked.status !== 0) return null;
+  return [...new Set(`${diff.stdout}\n${untracked.stdout}`.split("\n").map((s) => s.trim()).filter(Boolean))];
+}
+
+// Typecheck and lint take JS/TS. Test also takes C# so a Unity script still reaches the test script.
+function filesFor(step, files) {
+  const code = files.filter((f) => CODE_FILE.test(f));
+  if (step === "typecheck" || step === "lint") return code;
+  return [...code, ...files.filter((f) => f.endsWith(".cs"))];
+}
+
+async function verify(lineArgs = []) {
   const timeoutEnv = process.env.CONTROL_VERIFY_TIMEOUT_MS;
   if (timeoutEnv !== undefined && !/^[1-9]\d*$/.test(timeoutEnv)) {
     const error = `CONTROL_VERIFY_TIMEOUT_MS must be a positive number of milliseconds, got "${timeoutEnv}"`;
     report(false, { error }, `FAIL ${error}`);
   }
   const timeoutMs = Number(timeoutEnv ?? 600000);
+  const parsed = parseVerifyArgs(lineArgs);
+  if (parsed.error) report(false, { error: parsed.error }, `FAIL ${parsed.error}  ->  see: node scripts/control.mjs --help`);
+  if (!parsed.changed) {
+    const state = treeState();
+    if (state && recordedState() === state) report(true, { skipped: "tree already verified" }, "ok  verify (tree already verified, skipped)");
+  }
   let scripts = {};
   try {
     scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
@@ -156,13 +249,29 @@ async function verify() {
   if (names.length === 0) {
     report(false, { error: "no typecheck, lint, test or verify script" }, "FAIL no typecheck, lint, test or verify script in package.json  ->  add at least one, then re-run verify");
   }
+  let changedFiles = null;
+  if (parsed.changed) {
+    changedFiles = parsed.paths.length ? parsed.paths : changedPaths();
+    if (!changedFiles) report(false, { error: "could not list changed paths" }, "FAIL verify --changed could not list changed paths  ->  pass the paths, or run verify");
+  }
+  const before = parsed.changed ? null : treeState();
   const steps = [];
-  for (const step of names) steps.push({ step, ...(await runStep("npm", ["run", step, "--silent"], timeoutMs)) });
+  for (const step of names) {
+    if (parsed.changed) {
+      const matched = filesFor(step, changedFiles);
+      if (matched.length === 0) {
+        steps.push({ step, ok: true, ms: 0, output: "", skipped: "no matching paths" });
+        continue;
+      }
+      steps.push({ step, ...(await runStep("npm", ["run", step, "--silent", "--", ...matched], timeoutMs)) });
+    } else steps.push({ step, ...(await runStep("npm", ["run", step, "--silent"], timeoutMs)) });
+  }
   const ok = steps.every((s) => s.ok);
+  if (ok && !parsed.changed && before && treeState() === before) recordState(before);
   const text = steps
-    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} ${s.timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : `(${s.ms}ms)`}${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
+    .map((s) => `${s.ok ? "ok  " : "FAIL"} ${s.step} ${s.skipped ? "(no matching paths)" : s.timedOut ? `timed out after ${Math.round(timeoutMs / 1000)}s` : `(${s.ms}ms)`}${s.ok ? "" : `\n${s.output.split("\n").slice(-20).join("\n")}`}`)
     .join("\n");
-  report(ok, { steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
+  report(ok, { ...(parsed.changed ? { changed: changedFiles } : {}), steps: steps.map(({ output, ...s }) => (s.ok ? s : { ...s, output })) }, text);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -294,7 +403,7 @@ async function screenshot(lineArgs) {
 // eslint-disable-next-line no-unused-vars -- `rest` is used by feature commands added below.
 const [command, ...rest] = args;
 if (command === "doctor") await doctor();
-else if (command === "verify") await verify();
+else if (command === "verify") await verify(rest);
 else if (command === "screenshot") await screenshot(rest);
 else {
   process.stdout.write(`${HELP}\n`);

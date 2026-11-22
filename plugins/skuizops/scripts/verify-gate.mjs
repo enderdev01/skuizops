@@ -18,6 +18,8 @@ const git = (cwd, ...args) => spawnSync("git", args, { cwd, encoding: "utf8", ma
 // Identifies what verify would see: HEAD on a clean tree, else a hash of HEAD, the diff against it and every
 // untracked file. null when it cannot tell (no repo, no commit, git failed): then verify always runs.
 // Ignored files are not part of it, as they were not for the clean-tree check.
+// scripts/control.mjs (this repo and the project template) records the same string after a full verify
+// passes, and refuses to record a `verify --changed` pass: a filtered run is not the suite this hook trusts.
 export function treeState(cwd) {
   const head = git(cwd, "rev-parse", "HEAD");
   const status = git(cwd, "status", "--porcelain");
@@ -33,6 +35,32 @@ export function treeState(cwd) {
     return null;
   }
   return `dirty:${hash.digest("hex")}`;
+}
+
+// Git dir file the gate and a passing full verify share. null when this is not a repo.
+export function markerPath(cwd) {
+  const found = git(cwd, "rev-parse", "--git-path", "skuizops-verified");
+  if (found.status !== 0) return null;
+  const rel = found.stdout.trim();
+  return rel ? resolve(cwd, rel) : null;
+}
+
+export function recordedState(cwd) {
+  const marker = markerPath(cwd);
+  if (!marker) return null;
+  try {
+    return readFileSync(marker, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+export function recordState(cwd, state) {
+  const marker = markerPath(cwd);
+  if (!marker || !state) return;
+  try {
+    writeFileSync(marker, `${state}\n`);
+  } catch {}
 }
 
 // A change that can modify the check that judges it makes the check unreliable. shortcut: package.json "scripts" edits are not flagged, add if agents start rewiring them.
@@ -57,12 +85,7 @@ function main() {
 
   // Outside a git repo, always verify. Otherwise skip when this exact tree state was already verified.
   const state = treeState(cwd);
-  const marker = state ? resolve(cwd, git(cwd, "rev-parse", "--git-path", "skuizops-verified").stdout.trim()) : "";
-  if (marker) {
-    try {
-      if (readFileSync(marker, "utf8").trim() === state) process.exit(0);
-    } catch {}
-  }
+  if (state && recordedState(cwd) === state) process.exit(0);
 
   // Prefer the project's control CLI; else an npm "verify" script; else nothing to run.
   let command;
@@ -91,11 +114,7 @@ function main() {
   const failure = verdict(spawnSync(command[0], command[1], { cwd, encoding: "utf8", timeout: 240000 }));
   if (failure === null) {
     if (note) say(`skuizops: ${note}`);
-    if (marker) {
-      try {
-        writeFileSync(marker, `${state}\n`);
-      } catch {}
-    }
+    if (state) recordState(cwd, state);
     process.exit(0);
   }
 
