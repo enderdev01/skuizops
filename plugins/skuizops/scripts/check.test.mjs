@@ -123,6 +123,27 @@ describe("check", () => {
     assert.match(r.text, /\/skuizops:install-hooks .*pre-commit is outdated/);
   });
 
+  it("tells to update the plugin, not to reinstall hooks, when the manifest is newer than the plugin", () => {
+    const s = sandbox();
+    const manifest = join(s.project, ".githooks", ".skuizops.json");
+    const content = "#!/bin/sh\n# newer\n";
+    writeFileSync(join(s.project, ".githooks", "pre-commit"), content);
+    writeFileSync(join(s.project, "scripts", "guard", "branch-guard.mjs"), content);
+    const m = JSON.parse(readFileSync(manifest, "utf8"));
+    m.version = "999.0.0";
+    m.files[".githooks/pre-commit"] = createHash("sha256").update(content).digest("hex");
+    m.files["scripts/guard/branch-guard.mjs"] = createHash("sha256").update(content).digest("hex");
+    writeFileSync(manifest, JSON.stringify(m));
+    for (const name of ["git hooks", "project guards"]) {
+      const r = s.row(name);
+      assert.equal(r.status, "fail", name);
+      assert.match(r.text, /claude plugin update skuizops@juicebar/);
+      assert.match(r.text, /v999\.0\.0/);
+      assert.doesNotMatch(r.text, /install-hooks/);
+      assert.doesNotMatch(r.text, /outdated/);
+    }
+  });
+
   it("accepts identical hooks installed by another plugin version, and shows one plugin version", () => {
     const s = sandbox();
     const manifest = join(s.project, ".githooks", ".skuizops.json");
