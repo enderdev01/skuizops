@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,17 @@ describe("editViolation: more protected files", () => {
     assert.equal(editViolation("/Users/ada/other/.claude/settings.json", "/Users/ada/other", env), null);
   });
   it("allows the feature map", () => assert.equal(editViolation(`${project}/.claude/verification/features/README.md`, project, env), null));
+  // PR #76 review: a gh alias, pager, editor or browser written to gh's config runs shell on the next gh call.
+  it("blocks gh's config dir even outside ~/DEV", () => {
+    assert.ok(editViolation("/Users/ada/.config/gh/config.yml", "/tmp/x", env));
+    assert.ok(editViolation("/Users/ada/.config/GH/hosts.yml", "/tmp/x", env));
+    assert.ok(editViolation("/Users/ada/ghc/config.yml", "/tmp/x", { ...env, GH_CONFIG_DIR: "/Users/ada/ghc" }));
+    assert.ok(editViolation("/Users/ada/xdg/gh/config.yml", "/tmp/x", { ...env, XDG_CONFIG_HOME: "/Users/ada/xdg" }));
+  });
+  it("allows look-alikes of gh's config dir", () => {
+    assert.equal(editViolation("/Users/ada/.config/ghostty/config", "/tmp/x", env), null);
+    assert.equal(editViolation("/Users/ada/xdg/gh/config.yml", "/tmp/x", env), null);
+  });
 });
 
 describe("commandViolation", () => {
@@ -96,6 +107,10 @@ describe("commandViolation", () => {
     "git checkout HEAD~1 -- .githooks",
     "FOO=1 sudo rm .githooks/pre-commit",
     "echo x >| .githooks/pre-commit",
+    "echo x >! .githooks/pre-commit",
+    "echo x >>! .githooks/pre-commit",
+    "echo x &>| .githooks/x",
+    "echo x &>| ~/.zshrc",
     "echo x >& .githooks/pre-commit",
     "echo x >&.githooks/pre-commit",
     "echo x &> .githooks/x",
@@ -132,6 +147,46 @@ describe("commandViolation", () => {
     'node -e "console.log([1].map(x=>x+1))"',
     'grep -- "->" f',
   ]) it(`allows: ${command}`, () => assert.equal(check(command), null));
+
+  it("blocks shell writes to gh's config dir (PR #76 review)", () => {
+    const ghEnv = { HOME: home, GH_CONFIG_DIR: join(home, "ghc"), XDG_CONFIG_HOME: join(home, "xdg") };
+    const ghCheck = (command) => commandViolation(command, { project: app, cwd: app, env: ghEnv });
+    for (const c of [
+      "cat > ~/.config/gh/config.yml <<'EOF'\naliases:\n  ci: '!git commit --no-verify'\nEOF\ngh ci",
+      "tee -a ~/.config/gh/config.yml <<'EOF'\npager: sh\nEOF",
+      "echo 'pager: sh' >> $HOME/.config/gh/config.yml && gh pr view 1",
+      "echo 'pager: sh'>~/.config/gh/config.yml",
+      "cd ~/.config/gh && echo 'pager: sh' > config.yml",
+      "cat > \"$GH_CONFIG_DIR/config.yml\" <<'EOF'\npager: sh\nEOF",
+      "cat > ${XDG_CONFIG_HOME}/gh/config.yml <<'EOF'\npager: sh\nEOF",
+      "cp /tmp/c.yml ~/.config/gh/config.yml",
+      "cat >! ~/.config/gh/config.yml <<'EOF'\npager: sh\nEOF",
+      "echo 'pager: sh' >>! ~/.config/gh/config.yml",
+      "echo 'pager: sh' &>| ~/.config/gh/config.yml",
+      "echo 'pager: sh' &>>| ~/.config/gh/config.yml",
+      "echo 'pager: sh' &>! ~/.config/gh/config.yml",
+    ]) assert.match(ghCheck(c) ?? "allowed", /protected user file/, c);
+    assert.equal(ghCheck("cat ~/.config/gh/config.yml"), null);
+    assert.equal(ghCheck("gh pr view 1 > /tmp/pr.txt"), null);
+  });
+
+  // cherry rounds 1-2 (zsh `>!`, `&>|`): run every write syntax in the real shells; whatever path-guard allows must not touch gh's config.
+  describe("what path-guard allows does not write gh's config in a real shell", () => {
+    const ghFile = join(home, ".config", "gh", "config.yml");
+    const forms = [">", ">>", ">|", ">!", ">>!", ">>|", "&>", "&>>", "&>|", "&>!", "&>>|", "&>>!", ">&", ">&!", "1>", "2>", "1>>!", "1<>"];
+    for (const shell of ["/bin/bash", "/bin/zsh"].filter((s) => existsSync(s))) {
+      for (const op of forms) {
+        for (const cmd of [`echo x ${op} ~/.config/gh/config.yml`, `echo x ${op}~/.config/gh/config.yml`]) {
+          it(`${shell}: ${cmd}`, () => {
+            rmSync(join(home, ".config", "gh"), { recursive: true, force: true });
+            mkdirSync(join(home, ".config", "gh"), { recursive: true });
+            spawnSync(shell, ["-c", cmd], { cwd: app, env: { HOME: home, PATH: "/usr/bin:/bin" } });
+            if (existsSync(ghFile)) assert.ok(check(cmd), `allowed, but ${shell} wrote ${ghFile}`);
+          });
+        }
+      }
+    }
+  });
 
   it("allows a plain cat of the trust list", () => assert.equal(check(`cat ${trust}`), null));
   it("blocks cat of the trust list with a redirection", () => assert.ok(check(`cat ${trust} > x`)));

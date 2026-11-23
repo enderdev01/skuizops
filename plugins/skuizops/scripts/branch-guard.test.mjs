@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
+import { normalize } from "node:path";
 import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation } from "./branch-guard.mjs";
 
 describe("isProtected", () => {
@@ -296,6 +297,83 @@ describe("issue 61/63: text is data, each git is judged by its own dir", () => {
   blocked("cat <<EOF\nEO\\\nF\ngit commit -m x\nEOF");
 });
 
+describe("PR #76 review: every dir an `||` chain may leave the shell in is judged", () => {
+  const at = (d) => ({ "/abs/wt": "fix/x", "/abs/wt2": "fix/y", "/abs/repo": "develop", "/abs/repo/sub": "develop", "/abs/wt/sub": "fix/x" })[normalize(d)] ?? null;
+  const run = (cmd, branch) => checkCommand(cmd, branch, at);
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)} on ${branch}`, () => assert.equal(run(cmd, branch), null));
+  const blocked = (cmd, branch) => it(`blocks ${JSON.stringify(cmd)} on ${branch}`, () => assert.match(run(cmd, branch) ?? "allowed", /blocked/));
+
+  // the session is on a work branch, /abs/repo is on develop
+  blocked("cd /abs/repo || cd /abs/wt && git commit -m x", "feat/a");
+  blocked("cd /abs/wt || cd /abs/repo && git commit -m x", "feat/a");
+  blocked("cd /abs/wt || cd /abs/wt2 || cd /abs/repo && git commit -m x", "feat/a");
+  blocked("cd /abs/repo || cd /abs/wt; git commit -m x", "feat/a");
+  blocked("cd /abs/repo || cd /abs/wt\ngit commit -m x", "feat/a");
+  blocked("cd /abs/repo || cd /abs/wt && git push -u origin HEAD", "feat/a");
+  blocked("cd /abs/repo || true && git commit -m x", "feat/a");
+  blocked("cd /abs/repo && cd /nope || git commit -m x", "feat/a");
+  blocked("cd /abs/repo || git -C /abs/wt status && git commit -m x", "feat/a");
+  blocked("cd /abs/repo || cd /abs/wt && git -C ./sub commit -m x", "feat/a");
+  blocked("cd /abs/wt || cd /abs/repo && git -C ./sub commit -m x", "feat/a");
+  // the session itself is protected: a chain where every cd may fail still reaches it
+  blocked("cd /abs/wt || cd /abs/wt2; git commit -m x", "develop");
+  blocked("cd /abs/wt && cd /nope || git commit -m x", "develop");
+
+  // every dir the chain may reach is a work worktree
+  allowed("cd /abs/wt || cd /abs/wt2 && git commit -m x", "develop");
+  allowed("cd /abs/wt || cd /abs/wt2 && git push -u origin HEAD", "develop");
+  allowed("cd /abs/wt || cd /abs/repo && git -C /abs/wt2 commit -m x", "develop");
+  allowed("git -C /abs/wt commit -m x || git -C /abs/wt2 commit -m x", "develop");
+  allowed("cd /abs/wt && git add -A && git commit -m x", "develop");
+  allowed("cd /abs/wt || cd /abs/repo && git -C /abs/wt/sub commit -m x", "develop");
+});
+
+describe("PR #76 review: a gh config written in the same command is not data", () => {
+  const run = (cmd, branch = "develop") => checkCommand(cmd, branch);
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)}`, () => assert.equal(run(cmd, branch), null));
+  const blocked = (cmd, branch) => it(`blocks ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, branch) ?? "allowed", /blocked|forbidden/));
+  const alias = "aliases:\n  ci: '!git commit --no-verify -m x'";
+  const pager = "pager: git commit --no-verify -m x";
+
+  // an alias, then `gh <alias>`
+  blocked(`cat > ~/.config/gh/config.yml <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked(`tee ~/.config/gh/config.yml <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked(`tee -a ~/.config/gh/config.yml >/dev/null <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked(`echo "aliases: {ci: '!git commit --no-verify'}" >> ~/.config/gh/config.yml && gh ci`, "feat/a");
+  blocked(`cat > "$GH_CONFIG_DIR/config.yml" <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked(`cat > $XDG_CONFIG_HOME/gh/config.yml <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked(`cat > \${XDG_CONFIG_HOME}/gh/config.yml <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  // an unknown gh subcommand may be an alias or an extension, wherever its config was written
+  blocked(`cat > /tmp/notes.yml <<'EOF'\n${alias}\nEOF\ngh ci`, "feat/a");
+  blocked("gh my-ext 'git commit --no-verify -m x'", "feat/a");
+  // gh's own commands run the pager, editor or browser from the config written before them
+  blocked(`cat > ~/.config/gh/config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`echo '${pager}'>~/.config/gh/config.yml; gh pr view 1`, "feat/a");
+  blocked(`cd ~/.config/gh && cat > config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`cat > ~/.config/GH/config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`cat > /tmp/g/config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`cat > "$F" <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`printf '%s\\n' '${pager}' | tee -a ~/.config/gh/config.yml; gh pr list`, "feat/a");
+  blocked(`cat > ~/.config/gh/config.yml <<'EOF'\neditor: git commit -m x\nEOF\ngh pr create`);
+  // cherry round 1: zsh writes past noclobber with `>!`, and a gh alias runs shell with `!git`
+  blocked(`cat >! ~/.config/gh/config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`cat >>! ~/.config/gh/config.yml <<'EOF'\n${pager}\nEOF\ngh pr view 1`, "feat/a");
+  blocked(`echo '${pager}' >&! ~/.config/gh/config.yml; gh pr view 1`, "feat/a");
+  blocked(`cat > ~/.config/gh/config.yml <<'EOF'\naliases:\n  ci: '!git commit -m x'\nEOF\ngh ci`);
+
+  // #61: text written to a plain file next to a gh call is still data
+  allowed("cat > /tmp/pr.md <<'EOF'\nnever git commit --no-verify; git push origin main\nEOF\ngh pr create --title t --body-file /tmp/pr.md");
+  allowed("cat > /tmp/pr.md <<'EOF' && gh pr create --title t --body-file /tmp/pr.md\nRun git commit --no-verify; then git push origin main.\nEOF");
+  allowed("gh pr view 1 > /tmp/pr.txt 2>&1; echo 'never git commit --no-verify'");
+  allowed('echo "remember to git commit"');
+  allowed('gh issue create --title t --body "never git commit --no-verify"');
+  it("plain gh calls are only gh's own commands", () => {
+    assert.equal(isPlainGhCall('gh pr create --title "t" --body "git commit"'), true);
+    assert.equal(isPlainGhCall('gh ci --body "git commit"'), false);
+    assert.equal(isPlainGhCall('gh "pr" create --body "git commit"'), false);
+  });
+});
+
 // The parser approximates the shell. Wherever the two disagree, an allowed command can run git. So run each
 // command in the real shells with a `git` shim: whatever the guard allows must never reach git commit/merge/push.
 describe("issue 61/63: what the guard allows does not run git commit, merge or push in a real shell", async () => {
@@ -334,4 +412,82 @@ describe("issue 61/63: what the guard allows does not run git commit, merge or p
       });
     }
   }
+});
+
+// PR #76 review: the same differential check for directories. Real dirs, a `git` shim that logs where it ran; the session
+// is on a work branch and `repo` is on develop. Whatever the guard allows must never commit or push inside `repo`.
+describe("PR #76 review: what the guard allows never commits in a protected dir in a real shell", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "guard-dirs-")));
+  const [bin, session, repo, wt, wt2] = ["bin", "session", "repo", "wt", "wt2"].map((d) => join(root, d));
+  for (const d of [bin, session, join(repo, "sub"), join(wt, "sub"), wt2]) mkdirSync(d, { recursive: true });
+  // The shim logs the dir it acts in: its cwd, moved by each leading `-C`.
+  writeFileSync(join(bin, "git"), '#!/bin/sh\nwhile [ "$1" = -C ]; do cd "$2" || exit 1; shift 2; done\necho "$PWD $*" >> "$GIT_LOG"\n', { mode: 0o755 });
+  const at = (d) => ({ [repo]: "develop", [join(repo, "sub")]: "develop", [wt]: "fix/x", [join(wt, "sub")]: "fix/y", [wt2]: "fix/y" })[normalize(d)] ?? null;
+  const shells = ["/bin/bash", "/bin/zsh"].filter((s) => existsSync(s));
+  const corpus = [
+    `cd ${repo} || cd ${wt} && git commit -m x`,
+    `cd ${wt} || cd ${repo} && git commit -m x`,
+    `cd ${repo} || cd ${wt}; git commit -m x`,
+    `cd ${repo} || true && git commit -m x`,
+    `cd ${repo} && cd /nope || git commit -m x`,
+    `cd ${repo} || git -C ${wt} status && git commit -m x`,
+    `cd ${repo} || cd ${wt} && git -C ./sub commit -m x`,
+    `cd ${repo} || cd ${wt} && git push -u origin HEAD`,
+    `cd ${wt} || cd ${wt2} && git commit -m x`,
+    `cd ${wt} && git commit -m x`,
+    `cd ${wt} || cd ${repo} && git -C ${wt2} commit -m x`,
+  ];
+  for (const shell of shells) {
+    for (const cmd of corpus) {
+      it(`${shell}: ${JSON.stringify(cmd)}`, () => {
+        const log = join(root, "log");
+        rmSync(log, { force: true });
+        spawnSync(shell, ["-c", cmd], { cwd: session, env: { PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: log }, encoding: "utf8" });
+        const ran = existsSync(log) ? readFileSync(log, "utf8") : "";
+        const inRepo = ran.split("\n").some((l) => /^\S+ (commit|push)\b/.test(l) && at(l.split(" ")[0]) === "develop");
+        if (inRepo) assert.match(checkCommand(cmd, "feat/a", at) ?? "allowed", /blocked/, `the shell ran git in a protected dir: ${ran}`);
+      });
+    }
+  }
+  // cherry round 1 (zsh `>!`): any redirect syntax the parser misreads would let a gh config write pass as data.
+  // So run each command with a temp HOME: when the guard allows it, gh's config must be untouched.
+  const home = join(root, "home");
+  const ghConfig = join(home, ".config", "gh", "config.yml");
+  const payload = "<<'EOF'\npager: git commit --no-verify -m x\nEOF";
+  const writes = [
+    `cat > ~/.config/gh/config.yml ${payload}`,
+    `cat >! ~/.config/gh/config.yml ${payload}`,
+    `cat >>! ~/.config/gh/config.yml ${payload}`,
+    `cat >| ~/.config/gh/config.yml ${payload}`,
+    `cat &>! ~/.config/gh/config.yml ${payload}`,
+    `cat >&! ~/.config/gh/config.yml ${payload}`,
+    `cat 1<> ~/.config/gh/config.yml ${payload}`,
+    `cat ${payload.split("\n")[0]}>~/.config/gh/config.yml\n${payload.split("\n").slice(1).join("\n")}`,
+    `tee ~/.config/gh/config.yml ${payload}`,
+    `cd ~/.config/gh && cat > config.yml ${payload}`,
+    `cat > ~/.config/"gh"/config.yml ${payload}`,
+    `cat > ~/.config/g\\h/config.yml ${payload}`,
+  ];
+  for (const shell of shells) {
+    for (const w of writes) {
+      const cmd = `${w}\ngh pr view 1`;
+      it(`${shell}: gh config untouched unless blocked: ${JSON.stringify(cmd)}`, () => {
+        rmSync(home, { recursive: true, force: true });
+        mkdirSync(join(home, ".config", "gh"), { recursive: true });
+        spawnSync(shell, ["-c", cmd], { cwd: session, env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: join(root, "log") }, encoding: "utf8" });
+        if (existsSync(ghConfig)) assert.ok(checkCommand(cmd, "feat/a", at), `allowed, but the shell wrote ${ghConfig}`);
+      });
+    }
+  }
+
+  it("the corpus does reach the protected dir", () => {
+    const log = join(root, "log");
+    rmSync(log, { force: true });
+    spawnSync("/bin/sh", ["-c", corpus[0]], { cwd: session, env: { PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: log } });
+    assert.match(readFileSync(log, "utf8"), new RegExp(`^${repo} commit`));
+  });
 });

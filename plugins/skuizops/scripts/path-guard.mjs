@@ -2,7 +2,7 @@
 //   node path-guard.mjs        (Edit|Write|NotebookEdit) checks the target file
 //   node path-guard.mjs bash   (Bash) checks the shell command, best effort
 // Protected anywhere: the skuizops config dir (trust list), the installed plugins, the user's
-// Claude settings, git config and shell profiles; a directory-marketplace source repo, unless the session is opened in it.
+// Claude settings, git and gh config and shell profiles; a directory-marketplace source repo, unless the session is opened in it.
 // Protected under the scope roots (~/DEV): any .githooks/, scripts/guard/ or .git/ path and any
 // .claude/settings*.json, in any project.
 // The human edits these by hand.
@@ -30,7 +30,9 @@ export function editViolation(file, project, env = process.env) {
   }
   const homeFiles = [[".claude", "settings.json"], [".claude", "settings.local.json"], [".gitconfig"], ...PROFILES.map((p) => [p])];
   const home = (...parts) => fold(join(env.HOME ?? "", ...parts));
-  if (homeFiles.some((parts) => target === home(...parts)) || under(target, home(".config", "git"))) {
+  // gh runs aliases, extensions and its pager, editor and browser from its config dir.
+  const ghDirs = [home(".config", "gh"), env.GH_CONFIG_DIR && fold(env.GH_CONFIG_DIR), env.XDG_CONFIG_HOME && fold(join(env.XDG_CONFIG_HOME, "gh"))];
+  if (homeFiles.some((parts) => target === home(...parts)) || [home(".config", "git"), ...ghDirs].some((dir) => dir && under(target, dir))) {
     return `${file} is a protected user file. Agents cannot change it: ask the human to edit it.`;
   }
   const roots = scopeRoots(env).map(fold);
@@ -83,7 +85,7 @@ function runsSetup(words, depth = 0) {
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
-const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST)\b/.test(unquote(w));
+const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST|GH_CONFIG_DIR|XDG_CONFIG_HOME)\b/.test(unquote(w));
 const subst = (w) => /^\$SUBST/.test(unquote(w));
 
 // Heredoc bodies are data, not shell: drop them, but an unquoted one still runs `$(...)` and backticks, so keep those as lines.
@@ -237,7 +239,7 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const inlineWrite = toolEditsOnly && INLINE_CODE.test(command) && FILE_WRITE_API.test(command);
   const flat = hideQuotedRedirects(stripHeredocs(command))
     .replace(/\d*>&(\d+|-)(?![^\s;&|)<>])/g, " ") // `2>&1`, `>&-`: fd duplication, not a file
-    .replace(/&>>?|>[|&]/g, ">"); // `&>`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
+    .replace(/&>>?[|!]?|>[|&]/g, ">"); // `&>`, `&>|`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
   const inner = [];
   const text = takeSubstitutions(flat, inner);
   const segments = [text, ...inner].join("\n").split(/\n|;|&|\||\(|\)|`/);
@@ -249,14 +251,15 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
-    const w = unquote(word).replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here);
+    const w = unquote(word).replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here).replace(/^\$(?:(GH_CONFIG_DIR|XDG_CONFIG_HOME)|\{(GH_CONFIG_DIR|XDG_CONFIG_HOME)\})(?=\/|$)/, (m, a, b) => env[a ?? b] ?? m);
     return /[*?[]/.test(w) ? globSync(w, { cwd: from }).map((m) => resolve(from, m)).concat(resolve(from, w)) : [resolve(from, w)];
   };
   const dirOf = (word, from) => (unknownVar(word) ? resolve("/", unquote(word)) : clean(word, from)[0]);
   const unhide = (s) => s.replaceAll("\u0001", ">");
   for (const segment of segments) {
-    const redirects = [...segment.matchAll(/\d*>>?\|?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
-    const words = unhide(segment.replace(/\d*>>?\|?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
+    // `>|` and zsh `>!` write past noclobber.
+    const redirects = [...segment.matchAll(/\d*>>?[|!]?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
+    const words = unhide(segment.replace(/\d*>>?[|!]?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
     if (runsSetup(words)) return "Only the human runs the setup. Ask them to run: npx github:enderdev01/skuizops";
     if (["cd", "pushd"].includes(words[0])) here = dirOf(words[1] ?? "~", here);
     const git = gitCall(words);

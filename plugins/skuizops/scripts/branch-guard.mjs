@@ -52,8 +52,11 @@ function parseGit(words) {
 // A `gh` call whose only quoted text is inert data (no `$`, backtick, `;`, `|`...) cannot run git, so its
 // text (e.g. an issue body that mentions `git commit`) is not inspected. `gh alias`/`extension` can run shell.
 const GH_DATA = /"\$\(cat <<'(\w+)'\n([\s\S]*?)\n\1\n\)"|"(?:\\.|[^"\\$`])*"|'[^']*'/g;
+// gh's own commands. Any other first word may be an alias or an extension, which run shell; `alias`, `extension` and
+// `config` define them and gh's browser, editor and pager; `copilot` downloads and runs a program.
+const GH_BUILTIN = new Set(["api", "attestation", "auth", "browse", "cache", "codespace", "completion", "gist", "gpg-key", "help", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "version", "workflow", "--help", "-h", "--version"]);
 export function isPlainGhCall(command) {
-  if (!/^gh\s/.test(command) || /^gh\s+(alias|extension)\b/.test(command)) return false;
+  if (!GH_BUILTIN.has(/^gh[ \t]+([^\s;&|<>]+)/.exec(command)?.[1])) return false;
   // A body line equal to the delimiter would end the heredoc early and run the rest: keep the `$` so it is rejected.
   const rest = command.replace(GH_DATA, (m, tag, body) => (tag && body.split("\n").includes(tag) ? m : ""));
   return !/[;&|<>(){}$`\\#"'\n]/.test(rest);
@@ -188,8 +191,7 @@ function kind(cmd) {
   // The first argument picks gh's subcommand and printf's `-v`: it must be read as the shell passes it, so it has to be plain.
   const first = a[1] && (a[1].quoted || /[$\\]/.test(a[1].raw) ? null : a[1].raw);
   if ((a[0].raw === "gh" || a[0].raw === "printf") && a[1] && first === null) return "other";
-  // gh runs its configured browser, editor and pager, and aliases and extensions; `config` sets them.
-  if (a[0].raw === "gh" && /^(alias|extension|ext|config)$/.test(first ?? "")) return "other";
+  if (a[0].raw === "gh" && !GH_BUILTIN.has(first)) return "other";
   // bash `printf -v` sets a variable that an arithmetic `$[x]` would evaluate, running its `$(...)`. Options come first.
   if (a[0].raw === "printf" && /^-v/.test(first ?? "")) return "other";
   return "inert";
@@ -197,10 +199,37 @@ function kind(cmd) {
 // A pipe feeds the left side's output to the right side: only an inert reader may receive it (never git or a shell).
 const pipesOk = (p) => p.cmds.every((c) => c.sep !== "|" || (kind(c) === "inert" && argv(c.words)[0].raw !== "cd"));
 
+// The file a word writes to when it holds an unquoted `>` (`>f`, `2>>f`, `x>f`, `&> f`, zsh `>! f`), else undefined. fd copies write none.
+function outTarget(words, k) {
+  const raw = words[k].raw;
+  for (let i = 0, q = null; i < raw.length; i++) {
+    const ch = raw[i];
+    if (q) (ch === q ? (q = null) : ch === "\\" && q === '"' && i++);
+    else if (ch === "\\") i++;
+    else if (ch === "'" || ch === '"') q = ch;
+    else if (ch === ">") {
+      const [, dup, force, rest] = /^>>?(&?)(!?)(.*)$/s.exec(raw.slice(i)); // `>!`, `>>!`, `>&!`: zsh writes past noclobber
+      const target = rest || words[k + 1]?.raw;
+      return dup && !force && /^(\d+|-)$/.test(target ?? "") ? undefined : target;
+    }
+  }
+}
+// gh reads its config on every run: aliases, extensions, pager, editor, browser. A file written in the same command
+// may be that config unless it is a plain literal path outside any `gh` dir and not named config.yml or hosts.yml.
+const MAY_BE_GH_CONFIG = (t) => /[$`\\*?[{]|^~(?!\/)/.test(t) || /(^|\/)gh(\/|$)|(^|\/)(config|hosts)\.ya?ml$/i.test(t.replace(/["']/g, ""));
+const writesGhConfig = (p) =>
+  p.cmds.some((c) => argv(c.words)[0]?.raw === "gh") &&
+  p.cmds.some((c) => {
+    const a = argv(c.words);
+    const tee = a[0]?.raw === "tee" ? a.slice(1).filter((w) => !w.raw.startsWith("-")).map((w) => w.raw) : [];
+    return [...tee, ...c.words.map((_, k) => outTarget(c.words, k))].some((t) => t !== undefined && MAY_BE_GH_CONFIG(t));
+  });
+
 // The command with data removed: every argument of an inert command, heredoc bodies fed to one, and comments.
 // Only when every command is inert, git, or an assignment, so no removed text can reach a shell. Else null.
 function dataOnly(p) {
   if (!p.cmds.every((c) => kind(c) !== "other") || !pipesOk(p) || p.cuts.some((c) => c.owner && kind(c.owner) !== "inert")) return null;
+  if (writesGhConfig(p)) return null;
   const spans = p.cuts.map((c) => [c.start, c.end, ""]);
   for (const c of p.cmds) {
     const head = argv(c.words)[0];
@@ -253,19 +282,25 @@ function gitDirs(p) {
     if (a[k]?.quoted) return null; // a quoted subcommand
     return dir === null ? cwd : under(cwd, dir); // raw: `git -C` follows symlinks physically, so `..` is not folded
   };
-  // cwd: the dirs the shell may be in. A `cd` holds for its `&&` chain; after `;`, `||`, `|` or `&` either side may apply.
-  let cwd = [null], base = cwd;
+  // ok / fail: the dirs the shell may be in when the last status was zero / non-zero. `&&` runs a command only on ok,
+  // `||` only on fail, anything else on either; a skipped command keeps the state it skipped on, so in
+  // `cd A || cd B && git …` git may run in A (cd A succeeded, cd B skipped) or in B.
+  let ok = [null], fail = [null];
+  const union = (...sets) => [...new Set(sets.flat())];
   const out = [];
   p.cmds.forEach((c, n) => {
-    if (c.sep && c.sep !== "&&") base = cwd = [...new Set([...base, ...cwd])];
+    const cwd = c.sep === "&&" ? ok : c.sep === "||" ? fail : union(ok, fail);
+    let moved = cwd; // where the command leaves the shell when it succeeds
     const a = argv(c.words);
-    if (!a.length) return assign(c, n);
-    if (isGit(a[0])) return out.push(dirOf(a, cwd));
-    if (a[0].quoted || /[$\\]/.test(a[0].raw) || MOVES_CWD.has(a[0].raw)) cwd = [null];
+    if (!a.length) assign(c, n);
+    else if (isGit(a[0])) out.push(dirOf(a, cwd));
+    else if (a[0].quoted || /[$\\]/.test(a[0].raw) || MOVES_CWD.has(a[0].raw)) moved = [null];
     else if (a[0].raw === "cd") {
       const d = a.length === 2 ? pathOf(a[1]) : null;
-      cwd = d === null ? [null] : under(cwd, d).map((x) => normalize(x));
+      moved = d === null ? [null] : under(cwd, d).map((x) => normalize(x));
     }
+    ok = union(c.sep === "||" ? ok : [], moved);
+    fail = union(c.sep === "&&" ? fail : [], cwd);
   });
   return out;
 }
@@ -296,7 +331,8 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
   // each segment is inspected. Redirections are removed first: `2>&1` and `> file` are not refspecs.
   const segments = text.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/);
   const wordsOf = (s) => s.trim().split(/\s+/);
-  const gitIn = (ws) => ws.findIndex((w) => w === "git" || w.endsWith("/git"));
+  // `!git` is how a gh or git alias runs shell.
+  const gitIn = (ws) => ws.findIndex((w) => w === "git" || w === "!git" || w.endsWith("/git"));
   // Dirs are trusted only when the parser saw exactly the gits found here, else a git it missed could hide.
   let dirs = parsed && gitDirs(parsed);
   if (dirs && dirs.length !== segments.filter((s) => gitIn(wordsOf(s)) !== -1).length) dirs = null;
