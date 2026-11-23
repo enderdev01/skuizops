@@ -108,7 +108,7 @@ function parseShell(command) {
           j = e + 1;
         }
         if (end === -1 || (!h.quoted && /\$\(|`/.test(src.slice(start, end)))) return null;
-        cuts.push({ start, end, owner: h.owner });
+        cuts.push({ start, end, owner: h.owner, quoted: h.quoted });
         i = end;
       }
       split("\n", i);
@@ -251,11 +251,11 @@ function fileWriters(p) {
   return out;
 }
 
-// The command with data removed: every argument of an inert command, heredoc bodies fed to one, and comments.
-// Only when every command is inert, git, or an assignment, so no removed text can reach a shell. Else null.
-// The text of the commands in `keep` stays.
+// The command with data removed: every argument of an inert command, heredoc bodies fed to one (or to git, which reads
+// them as a message or a patch, never as shell), and comments. Only when every command is inert, git, or an assignment,
+// so no removed text can reach a shell. Else null. The text of the commands in `keep` stays.
 function dataOnly(p, keep = new Set()) {
-  if (!p.cmds.every((c) => kind(c) !== "other") || !pipesOk(p) || p.cuts.some((c) => c.owner && kind(c.owner) !== "inert")) return null;
+  if (!p.cmds.every((c) => kind(c) !== "other") || !pipesOk(p) || p.cuts.some((c) => c.owner && !["inert", "git"].includes(kind(c.owner)))) return null;
   if (writesGhConfig(p)) return null;
   const spans = p.cuts.filter((c) => !keep.has(c.owner)).map((c) => [c.start, c.end, ""]);
   for (const c of p.cmds) {
@@ -268,45 +268,219 @@ function dataOnly(p, keep = new Set()) {
   return out + p.src.slice(at);
 }
 
-const PATH_RE = /^(\/|\.\/|\.\.\/|~\/|\.\.$|\.$)[\w./@+-]*$/;
-const home = (d) => (d.startsWith("~/") ? homedir() + d.slice(1) : d);
-// Only config that cannot move the work tree, alias a command or run code is honored among the leading options (#63).
-const SAFE_CONFIG = /^(user\.(name|email)|commit\.gpgsign)=[\w.@+-]*$/;
-// Builtins and keywords that can change the shell's directory (or hide a `cd` after them).
-const MOVES_CWD = new Set(["pushd", "popd", "builtin", "command", "source", ".", "eval", "exec", "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "select", "case", "esac", "!", "{", "}", "[[", "time", "function", "coproc", "alias", "set", "shopt", "trap"]);
+// Fail closed (PR #76 round 4): what the guard cannot read exactly is never guessed. A git whose directory cannot be
+// resolved runs in UNKNOWN, and a commit, merge, push or ref move there is blocked: never judged by the session branch.
+const UNKNOWN = Symbol("unresolved dir");
 
-// Directories each git of the command may run in (null = the session cwd), in order, or null when not understood.
-// A git entry is null when its own dir cannot be read (it is then judged by the session branch).
+// The words of a text as the shell passes them, split into commands. Each word: v (quotes and backslashes removed), raw,
+// exp (holds a `$` or backtick expansion), split (an unquoted one, which may also become several words or a glob), glob
+// (an unquoted * ? [ or a brace not after `$`). Redirections and their targets are dropped. An unterminated quote keeps
+// the rest as one expanding word.
+function lex(s) {
+  const cmds = [[]];
+  let w = null, target = false;
+  const word = (i) => (w ??= { v: "", raw: "", start: i, exp: false, split: false, glob: false, redir: false });
+  const end = (i) => {
+    if (w) {
+      w.raw = s.slice(w.start, i);
+      // A here-string is the command's input (a shell runs it): its text stays a word.
+      if (w.redir && /^\d*<<</.test(w.v)) (w.redir = false), (w.v = w.v.replace(/^\d*<<</, ""));
+      if (w.redir) target = /^\d*&?[<>]+[&|!-]?$/.test(w.v); // a bare operator: the next word is its target
+      else if (!w.v && !w.raw.replace(/^\d*<<</, "")) {} // a bare `<<<`: its text is the next word
+      else if (target) target = false;
+      else cmds.at(-1).push(w);
+    }
+    w = null;
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i], next = s[i + 1];
+    if (c === " " || c === "\t") end(i);
+    else if (c === "#" && !w) i = lineEnd(s, i) - 1;
+    else if (c === "\\") {
+      if (next !== "\n") word(i).v += next ?? ""; // a line continuation joins the lines
+      i++;
+    } else if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      word(i).v += s.slice(i + 1, j === -1 ? s.length : j);
+      if (j === -1) w.exp = w.split = true;
+      i = j === -1 ? s.length : j;
+    } else if (c === '"') {
+      let j = i + 1;
+      for (word(i); j < s.length && s[j] !== '"'; j++) {
+        if (s[j] === "\\" && '$`"\\\n'.includes(s[j + 1])) w.v += s[++j];
+        else (w.v += s[j]), (w.exp ||= s[j] === "$" || s[j] === "`");
+      }
+      if (j >= s.length) w.exp = w.split = true;
+      i = j;
+    } else if ((c === "<" || c === ">") && !w?.redir) {
+      if (w && !/^\d+$/.test(s.slice(w.start, i))) end(i); // `x>f`: x is a word; `2>f`: 2 is the fd
+      word(i).redir = true;
+      w.v += c;
+    } else if (w?.redir && /[<>&|!-]/.test(c) && /[<>&|!]$/.test(w.v)) w.v += c; // `>>`, `>&`, `>|`, `>!`, `<<-`
+    else if (c === "&" && next === ">") {
+      end(i);
+      word(i).redir = true;
+      w.v += c;
+    } else if ("\n;&|()`".includes(c)) {
+      end(i);
+      target = false;
+      if (cmds.at(-1).length) cmds.push([]);
+    } else {
+      word(i);
+      if (c === "$") w.exp = w.split = true;
+      if ("*?[".includes(c) || (c === "{" && s[i - 1] !== "$")) w.glob = true;
+      w.v += c;
+    }
+  }
+  end(s.length);
+  return cmds.filter((c) => c.length);
+}
+const valueOf = (w) => w && lex(w.raw)[0]?.[0];
+const dequote = (s) => s.replace(/["'\\]/g, "");
+
+// `!git` is how a gh or git alias runs shell.
+const GIT_WORD = /^(!|.*\/)?git$/;
+const gitAt = (ws) => ws.findIndex((w) => !w.exp && !w.glob && GIT_WORD.test(w.v));
+// Every command of a text that holds a git word. The words of a command that does not run git (bash -c '…',
+// python -c "…", eval "…") may be run as shell: they are read the same way, three levels deep.
+function gitCalls(s, depth = 0) {
+  const out = [];
+  for (const ws of lex(s)) {
+    const at = gitAt(ws);
+    if (at !== -1) out.push({ ws, at });
+    // `GH_BROWSER='git …'`, `--editor="git …"`: the text after `=` is a value a program may run.
+    else if (depth < 3) for (const w of ws) if (/[\s;&|()`<>]/.test(w.v)) out.push(...gitCalls(w.v.replace(/^[^=\s]*=/, ""), depth + 1));
+  }
+  return out;
+}
+
+// Config that cannot run a command, move the hooks or the work tree (core.pager, core.fsmonitor, alias.* can).
+const SAFE_CONFIG = /^(user\.(name|email)|commit\.gpgsign|color\.[\w.-]+|advice\.[\w.-]+|core\.quotepath|init\.defaultbranch)=[^\n]*$/i;
+// Subcommands that run hooks or move refs: an expansion in their arguments may become --no-verify, -n or a protected ref.
+const RISKY = new Set(["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset", "push", "pull", "branch", "checkout", "switch", "tag", "update-ref", "commit-tree"]);
+const VAR_WORD = /^(?:\$(\w+)|\$\{(\w+)\}|"\$(\w+)"|"\$\{(\w+)\}")$/;
+const varName = (m) => m && (m[1] ?? m[2] ?? m[3] ?? m[4]);
+const NO_VERIFY = "--no-verify is forbidden: the git hooks enforce the branch policy.";
+const COMMIT_N = "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
+const UNRESOLVED = "git blocked: a word in this git command holds an expansion the guard cannot resolve ($VAR, ${…}, $(…), a glob or a brace), so git may get another subcommand, option, flag or directory. Write it out: a literal path for -C, literal words for the rest.";
+const CONFIG = "git blocked: git -c is limited to user.name, user.email, commit.gpgsign, color.*, advice.*, core.quotepath and init.defaultBranch here; other config can run commands or move the hooks or the work tree.";
+const GLOB = "git blocked: the shell expands an unquoted glob or brace (* ? [ {) in this git command, so git may get another subcommand or option. Quote the word or write it out; put file globs after --.";
+
+// The value of a word that is a variable gitDirs resolved to one literal (`$W`, "${W}"), else undefined. Unquoted, a
+// value with spaces or globs would split, so it is not resolved.
+const resolvedVar = (w, vars) => {
+  const m = VAR_WORD.exec(w.raw), d = m && vars.get(varName(m));
+  return d && !((m[1] ?? m[2]) && /[\s*?[]/.test(d)) ? d : undefined;
+};
+const valuesOf = (ws, vars) => ws.map((w) => resolvedVar(w, vars) ?? w.v);
+
+// Why the words of one git call are refused, or null. `vars`: variables gitDirs resolved to one literal.
+function wordsProblem(ws, at, vars = new Map()) {
+  const lit = (w) => (!w.exp && !w.glob) || resolvedVar(w, vars) !== undefined;
+  const vs = valuesOf(ws, vars);
+  // git accepts any unambiguous prefix of a long option, so `--no-verif` is `--no-verify`.
+  if (vs.slice(at + 1).some((v) => /^--no-v/.test(v))) return NO_VERIFY;
+  // xargs and parallel add words git gets from their input.
+  if (vs.slice(0, at).some((v) => /(^|\/)(xargs|parallel)$/.test(v))) return UNRESOLVED;
+  let k = at + 1;
+  for (; ws[k] && (!lit(ws[k]) || vs[k].startsWith("-")); k++) {
+    if (!lit(ws[k])) return UNRESOLVED; // an expansion before the subcommand may become one
+    if (vs[k] === "-c" || vs[k].startsWith("--config-env")) {
+      if (vs[k] !== "-c" || !ws[k + 1] || !lit(ws[k + 1]) || !SAFE_CONFIG.test(vs[k + 1])) return CONFIG;
+      k++;
+    } else if (GIT_OPTIONS_WITH_VALUE.includes(vs[k]) && ws[k + 1]) {
+      if (!lit(ws[k + 1]) && (ws[k + 1].split || ws[k + 1].glob)) return UNRESOLVED; // `-C $W` may split into a subcommand
+      k++;
+    }
+  }
+  if (!ws[k]) return null;
+  const rest = ws.slice(k + 1);
+  if (vs[k] === "commit" && vs.slice(k + 1).some((v) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(v))) return COMMIT_N;
+  if (expands(vs.slice(at + 1), (j) => ws[at + 1 + j].glob) || (vs[k] === "push" && rest.some((w) => w.glob))) return GLOB;
+  if (!RISKY.has(vs[k])) return null;
+  let ended = false;
+  for (let j = 0; j < rest.length; j++) {
+    const w = rest[j];
+    if (lit(w)) {
+      ended ||= w.v === "--";
+      continue;
+    }
+    // One word git reads as a value or a path, never as an option: a message, a message file, or after `--`.
+    const prev = j > 0 && lit(rest[j - 1]) ? rest[j - 1].v : "";
+    const value = ended || /^(-[a-zA-Z]*[mF]|--message|--file)$/.test(prev) || /^(-[a-zA-Z]*[mF]|--message=|--file=)./.test(w.v);
+    if (!value || w.split || w.glob) return UNRESOLVED;
+  }
+  return null;
+}
+
+// What a file writer puts in its file, as text a later shell would read: echo/printf arguments, heredoc bodies and
+// here-strings. unresolved: the text depends on what the guard cannot see (printf formats, echo escapes, expansions,
+// unquoted heredocs). Another file's or program's output is the shortcut noted at checkCommand.
+function writerContents(p, writers) {
+  return [...writers].map((c) => {
+    const a = argv(c.words), head = a[0]?.raw;
+    let text = "", unresolved = false;
+    if (head === "echo" || head === "printf") {
+      const vals = a.slice(1).map((w) => valueOf(w) ?? { v: "" });
+      text += vals.map((x) => x.v).join(" ") + "\n";
+      unresolved = vals.some((x) => x.exp || x.glob || x.v.includes("\\") || (head === "printf" && x.v.includes("%")));
+    }
+    c.words.forEach((w, k) => {
+      if (!/^\d*<<</.test(w.raw)) return;
+      const x = w.raw.replace(/^\d*<<</, "") ? lex(w.raw.replace(/^\d*<<</, ""))[0]?.[0] : valueOf(c.words[k + 1]);
+      text += (x?.v ?? "") + "\n";
+      unresolved ||= !!x?.exp;
+    });
+    for (const cut of p.cuts.filter((x) => x.owner === c)) {
+      const body = p.src.slice(cut.start, cut.end);
+      text += body + "\n";
+      unresolved ||= !cut.quoted && /[$\\`]/.test(body);
+    }
+    return { text, unresolved, raw: p.src.slice(c.words[0]?.start ?? 0, c.words.at(-1)?.end ?? 0) };
+  });
+}
+
+// Commands that cannot change the shell's directory, besides the inert ones.
+const STAYS = new Set(["[", "[[", "test", ":", "export", "sleep"]);
+
+// Directories each git of the command may run in, in order (null = the session cwd, UNKNOWN = not resolved), and the
+// variables resolved to one literal path; null when the pipes are not understood.
 function gitDirs(p) {
   if (!pipesOk(p)) return null;
   const vars = new Map();
+  const literal = (raw, x) => {
+    if (!x || x.exp || x.glob || /^~[^/]/.test(raw) || x.v.includes("\n")) return null; // `~user`, `~+`, `~-`
+    return /^~(\/|$)/.test(raw) ? homedir() + x.v.slice(1) : x.v;
+  };
   // `NAME=/path` alone on its statement, and NAME nowhere else but in `$NAME`/`${NAME}` (no `W+=`, `read W`, zsh `W[1]=`).
   const assign = (c, n) => {
     const m = /^([A-Za-z_]\w*)=(.*)$/s.exec(c.words[0].raw);
     if (!m || c.words.length !== 1) return;
-    const value = m[2].replace(/^(["'])(.*)\1$/s, "$2");
     const once = (p.src.match(new RegExp(`(?<![\\w$])(?<!\\$\\{)${m[1]}\\b`, "g")) ?? []).length === 1;
     const certain = [null, ";", "\n"].includes(c.sep) && [";", "\n", "&&"].includes(p.cmds[n + 1]?.sep);
-    vars.set(m[1], once && certain && PATH_RE.test(value) ? value : null);
+    vars.set(m[1], (once && certain && literal(m[2], lex(m[2])[0]?.[0] ?? { v: "" })) || null);
   };
-  const pathOf = (w) => {
-    const v = /^(?:\$(\w+)|\$\{(\w+)\}|"\$(\w+)"|"\$\{(\w+)\}")$/.exec(w.raw);
-    const name = v && (v[1] ?? v[2] ?? v[3] ?? v[4]);
-    const raw = v ? (name !== "_" && vars.get(name)) || null : w.quoted ? null : w.raw;
-    return raw && PATH_RE.test(raw) ? home(raw) : null;
+  // A literal directory: a quoted or unquoted path, or a variable resolved above. `cd` also needs it to start with `/` or
+  // `.`: a bare name may be found through CDPATH.
+  const pathOf = (w, cd) => {
+    const m = VAR_WORD.exec(w.raw);
+    const d = m ? (varName(m) !== "_" && vars.get(varName(m))) || null : literal(w.raw, valueOf(w));
+    if (!d || ((m?.[1] ?? m?.[2]) && /[\s*?[]/.test(d))) return null;
+    return cd && !/^(\/|\.\.?(\/|$))/.test(d) ? null : d;
   };
-  const under = (cwd, d) => (isAbsolute(d) ? [d] : cwd.map((c) => (c === null ? d : `${c}/${d}`)));
+  const under = (cwd, d) => (isAbsolute(d) ? [d] : cwd.map((c) => (c === UNKNOWN ? c : c === null ? d : `${c}/${d}`)));
   const dirOf = (a, cwd) => {
     let k = 1, dir = null;
-    while (a[k]?.raw.startsWith("-")) {
-      if (a[k].quoted) return null;
-      if (a[k].raw === "-C" && dir === null && a[k + 1]) {
-        if ((dir = pathOf(a[k + 1])) === null) return null;
+    for (let x = valueOf(a[k]); x && !x.exp && !x.glob && x.v.startsWith("-"); x = valueOf(a[k])) {
+      if (x.v === "-C" && dir === null && a[k + 1]) {
+        if ((dir = pathOf(a[k + 1], false)) === null) return [UNKNOWN];
         k += 2;
-      } else if (a[k].raw === "-c" && a[k + 1] && !a[k + 1].quoted && SAFE_CONFIG.test(a[k + 1].raw)) k += 2;
-      else return null; // `--bare`, `--git-dir`, a second `-C`...: git may act elsewhere, judge by the session (#63)
+      } else if (x.v === "-c" && SAFE_CONFIG.test(valueOf(a[k + 1])?.v ?? "") && !valueOf(a[k + 1]).exp) k += 2;
+      else if (x.v === "--no-pager" || x.v === "-P") k++;
+      else return [UNKNOWN]; // `--bare`, `--git-dir`, a second `-C`...: git may act elsewhere (#63)
     }
-    if (a[k]?.quoted) return null; // a quoted subcommand
+    const sub = valueOf(a[k]);
+    if (sub && (sub.exp || sub.glob)) return [UNKNOWN];
     return dir === null ? cwd : under(cwd, dir); // raw: `git -C` follows symlinks physically, so `..` is not folded
   };
   // ok / fail: the dirs the shell may be in when the last status was zero / non-zero. `&&` runs a command only on ok,
@@ -317,30 +491,58 @@ function gitDirs(p) {
   const out = [];
   p.cmds.forEach((c, n) => {
     const cwd = c.sep === "&&" ? ok : c.sep === "||" ? fail : union(ok, fail);
-    let moved = cwd; // where the command leaves the shell when it succeeds
+    let moved = cwd, failed = cwd; // where the command leaves the shell when it succeeds / fails
     const a = argv(c.words);
+    const cd = a[0]?.raw === "cd" ? 1 : ["builtin", "command"].includes(a[0]?.raw) && a[1]?.raw === "cd" ? 2 : 0;
     if (!a.length) assign(c, n);
     else if (isGit(a[0])) out.push(dirOf(a, cwd));
-    else if (a[0].quoted || /[$\\]/.test(a[0].raw) || MOVES_CWD.has(a[0].raw)) moved = [null];
-    else if (a[0].raw === "cd") {
-      const d = a.length === 2 ? pathOf(a[1]) : null;
-      moved = d === null ? [null] : under(cwd, d).map((x) => normalize(x));
-    }
+    else if (cd) {
+      let k = cd;
+      while (["-L", "-P"].includes(a[k]?.raw)) k++;
+      if (a[k]?.raw === "--") k++;
+      const d = a.length === k + 1 ? pathOf(a[k], true) : null; // no operand, `-`, two operands (zsh): not resolved
+      moved = d === null ? [UNKNOWN] : under(cwd, d).map((x) => (x === UNKNOWN ? x : normalize(x)));
+    } else if (kind(c) === "other" && !STAYS.has(a[0].raw)) moved = failed = [UNKNOWN]; // a function, alias, pushd, eval, zsh autocd…
     ok = union(c.sep === "||" ? ok : [], moved);
-    fail = union(c.sep === "&&" ? fail : [], cwd);
+    fail = union(c.sep === "&&" ? fail : [], failed);
   });
-  return out;
+  return { dirs: out, vars };
 }
 
-const HINT = " (the target dir could not be read from this command: pass the literal path, as in git -C <path> … or cd <path> && git …)";
-const GLOB = "git blocked: the shell expands an unquoted glob or brace (* ? [ {) in this git command, so git may get another subcommand or option. Quote the word or write it out; put file globs after --.";
+const UNKNOWN_DIR = (sub) => `git ${sub} blocked: the guard cannot tell which repository this git runs in (a cd, -C or variable it cannot resolve, a command before it that may change directory, or a shape it does not parse). Pass the literal path: git -C <path> … or cd <path> && git …`;
+const PROGRAM = "blocked: the program this command runs cannot be read (a variable, glob or substitution in the command name, or a shell given expanded text), so it may be git. Write the command name and the script literally.";
+const WRITTEN = "git blocked: git text written to a file holds escapes, format codes or expansions the guard cannot resolve (printf %, echo \\, $VAR, an unquoted heredoc), and a later call could run it with the hooks skipped. Write the text literally and quote the heredoc delimiter.";
 
-// Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
-// each segment is inspected. Redirections are removed first: `2>&1` and `> file` are not refspecs.
-const segmentsOf = (t) => t.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/);
-const wordsOf = (s) => s.trim().split(/\s+/);
-// `!git` is how a gh or git alias runs shell.
-const gitIn = (ws) => ws.findIndex((w) => w === "git" || w === "!git" || w.endsWith("/git"));
+// Words before the program: assignments, keywords and commands that run the next word.
+const WRAPPERS = new Set(["!", "{", "}", "then", "do", "else", "elif", "if", "while", "until", "time", "sudo", "env", "command", "builtin", "exec", "nohup", "nice", "xargs", "timeout"]);
+const SHELLS = new Set(["eval", "bash", "sh", "zsh", "dash", "ksh", "source", "."]);
+// The program each command runs must be readable: `$G commit`, `g*t`, `${G}it` or `$(…)` may be git. A plain `$NAME`
+// set outside this command is allowed when the command does not mention git. Text given to a shell is read the same way.
+function programProblem(text, command, mentionsGit) {
+  const check = (cmds, depth) => {
+    for (const ws of cmds) {
+      let i = 0;
+      while (ws[i] && (/^[A-Za-z_]\w*\+?=/.test(ws[i].raw) || (!ws[i].exp && WRAPPERS.has(ws[i].v)))) i++;
+      const w = ws[i];
+      if (!w) continue;
+      const shell = !w.exp && SHELLS.has(w.v.split("/").pop());
+      if (w.exp || (w.glob && !/^\[\[?$/.test(w.v))) {
+        const name = varName(VAR_WORD.exec(w.raw));
+        const elsewhere = !!name && new RegExp(`(?<![\\w$])(?<!\\$\\{)${name}\\b`).test(command);
+        if (mentionsGit || !name || elsewhere) return PROGRAM;
+      } else if (shell && mentionsGit && ws.slice(i + 1).some((x) => x.exp)) return PROGRAM;
+      if (shell && depth < 3) {
+        for (const x of ws.slice(i + 1)) if (/[\s;&|()`<>$]/.test(x.v)) {
+          const r = check(lex(x.v), depth + 1);
+          if (r) return r;
+        }
+      }
+    }
+    return null;
+  };
+  return check(lex(text), 0);
+}
+
 // The words after `git` that the shell may expand into another subcommand, an option or more words: a glob or brace in
 // the subcommand or before it, or one that can expand to a leading `-` or (braces) to several words. `glob(k)` says
 // whether word k is unquoted; file globs after `--` are only paths.
@@ -351,77 +553,72 @@ function expands(words, glob = () => true) {
   return words.some((w, k) => /[*?[{]/.test(w) && glob(k) && (k <= sub || (k < end && (/^[-*?[{]/.test(w) || /\{[^{}]*(,|\.\.)[^{}]*\}/.test(w)))));
 }
 
-// Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
+// Check of a shell command before Claude runs it; it fails closed on what it cannot resolve. The git hooks are the
+// authoritative layer.
+// shortcut: text written to a file is read as written (literal, quoted, glob and brace forms); a file built from another
+// file or program output (cp, base64, curl) and run by a later call is left to the git hooks, upgrade if an agent abuses it.
 export function checkCommand(command, currentBranch, branchAt = () => null) {
-  if (!/\bgit\b/.test(command)) return null;
   const parsed = parseShell(command);
+  // The shell drops quotes and backslashes: `"g"it` and `g\it` are git.
+  const mentionsGit = /\bgit\b/.test(dequote(command));
   // Text given to echo, cat, a heredoc... is data (#61). When anything else could run text, all of it is inspected.
   const text = (parsed && dataOnly(parsed)) ?? command;
-  // Text written to a file may be run by a later call: the hook-skipping flags are looked for in it too.
-  const written = (parsed && dataOnly(parsed, fileWriters(parsed))) ?? command;
-  if (!/\bgit\b/.test(written)) return null;
-  // git accepts any unambiguous prefix of a long option, so `--no-verif` is `--no-verify`.
-  if (/(^|[\s"'])--no-v/.test(written)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
+  const program = programProblem(text, command, mentionsGit);
+  if (program) return program;
+  if (!mentionsGit) return null;
+  const res = parsed && gitDirs(parsed);
+  const vars = res?.vars ?? new Map();
+  // Text written to a file may be run by a later call: it is checked for hook-skipping too, read as a shell would.
+  const writers = parsed ? fileWriters(parsed) : new Set();
+  const written = (parsed && dataOnly(parsed, writers)) ?? command;
+  const contents = parsed ? writerContents(parsed, writers) : [];
+  const all = [written, dequote(written), ...contents.map((c) => c.text)].join("\n");
+  if (!/\bgit\b/.test(all)) return null;
+  if (/(^|[\s"'])--no-v/.test(all)) return NO_VERIFY;
   // An included config file can set core.hooksPath without naming it here.
-  if (/\binclude\.path\b|\bincludeif\./i.test(written)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
+  if (/\binclude\.path\b|\bincludeif\./i.test(all)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
-  const withoutSetup = written.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
+  const withoutSetup = all.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
-  for (const segment of segmentsOf(written)) {
-    const words = wordsOf(segment);
-    const gitAt = gitIn(words);
-    if (gitAt === -1) continue;
-    const { sub, rest } = parseGit(words.slice(gitAt + 1));
-    if (sub === "commit" && rest.some((w) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))) {
-      return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
+  for (const s of [written, ...contents.map((c) => c.text)]) {
+    for (const { ws, at } of gitCalls(s)) {
+      const why = wordsProblem(ws, at, vars);
+      if (why) return why;
     }
   }
-  if (!/\bgit\b/.test(text)) return null;
-
-  // The parser knows which words are quoted: an unquoted glob or brace in a git it parsed is not understood.
-  for (const c of parsed?.cmds ?? []) {
-    const a = argv(c.words);
-    if (isGit(a[0]) && expands(a.slice(1).map((w) => w.raw.replace(/["']/g, "")), (k) => a[k + 1].glob)) return GLOB;
-  }
+  if (contents.some((c) => c.unresolved && /\bgit\b/.test(dequote(`${c.raw}\n${c.text}`)))) return WRITTEN;
+  if (!/\bgit\b/.test(dequote(text))) return null;
 
   if (isPlainGhCall(command)) return null;
 
-  // Dropping quotes splits `-C "$W"p commit` into `-C $W p commit` (subcommand `p`), hiding the commit: refuse the shape.
-  if (/\s-C\s+(?:"[^"]*"|'[^']*')[^\s;&|)]/.test(text)) return "git blocked: -C <quoted path> followed by more text in the same word is not understood: write the path as one word, git -C <path> …";
-
-  const segments = segmentsOf(text);
-  const hintable = /(^|[\s;&|])(cd|-C)\s/.test(text);
-  // Dirs are trusted only when the parser saw exactly the gits found here, else a git it missed could hide.
-  let dirs = parsed && gitDirs(parsed);
-  const exact = !!dirs && dirs.length === segments.filter((s) => gitIn(wordsOf(s)) !== -1).length;
-  if (dirs && !exact) {
-    // A git it missed (`!git` in a gh alias, text a non-data command receives) may run in any dir the command moves to.
-    if (hintable) return "git blocked: this command changes directory (cd or -C) and also holds git text the guard cannot place (a `!git` alias, or text a command may run). Run the git on its own: git -C <path> … or cd <path> && git …";
-    dirs = null;
-  }
-  let nth = -1;
-  for (const segment of segments) {
-    const words = wordsOf(segment);
-    const gitAt = gitIn(words);
-    if (gitAt === -1) continue;
-    nth++;
-    const own = dirs?.[nth] ?? null;
-    const hint = own === null && hintable ? HINT : "";
-    // Every dir this git may run in is judged; a violation on any of them blocks.
-    const branches = () => (own ?? [null]).map((d) => (d === null ? currentBranch : branchAt(d)));
+  // The parser's dirs are used only when it saw exactly the gits found here: a git it missed may run anywhere.
+  const parsedGits = parsed ? parsed.cmds.filter((c) => isGit(argv(c.words)[0])) : [];
+  const lexCalls = gitCalls(text);
+  const exact = !!res && lexCalls.length === parsedGits.length;
+  const calls = exact
+    ? parsedGits.map((c, n) => {
+        const a = argv(c.words);
+        const prefix = c.words.slice(0, c.words.indexOf(a[0])).map((w) => valueOf(w)?.v ?? "");
+        return { ws: a.flatMap((w) => lex(w.raw)[0] ?? []), at: 0, prefix, own: res.dirs[n] };
+      })
+    : lexCalls.map(({ ws, at }) => ({ ws, at, prefix: ws.slice(0, at).map((w) => w.v), own: [UNKNOWN] }));
+  for (const { ws, at, prefix, own } of calls) {
     // These decide which hooks, config and git binary run. GIT_EDITOR, GIT_PAGER and the like are fine.
-    if (words.slice(0, gitAt).some((w) => /^(HOME|PATH|GIT_DIR|GIT_EXEC_PATH|GIT_CONFIG\w*)=/.test(w))) {
+    if (prefix.some((w) => /^(HOME|PATH|GIT_DIR|GIT_EXEC_PATH|GIT_CONFIG\w*)=/.test(w))) {
       return "Setting HOME, PATH, GIT_DIR, GIT_EXEC_PATH or GIT_CONFIG* for a git command is forbidden: it changes which hooks and config git uses.";
     }
-    // A git the parser did not see (inside `bash -c '…'`, or no parse at all): its quotes are gone, so every glob counts.
-    if (!exact && expands(words.slice(gitAt + 1))) return GLOB;
-    const { sub, rest } = parseGit(words.slice(gitAt + 1));
+    const why = wordsProblem(ws, at, vars);
+    if (why) return why;
+    const { sub, rest } = parseGit(valuesOf(ws.slice(at + 1), vars));
     const args = [sub, ...rest.filter((w) => !w.startsWith("-"))];
+    // Every dir this git may run in is judged; a violation on any of them blocks, and so does a dir not resolved.
+    const branches = () => own.map((d) => (d === UNKNOWN ? d : d === null ? currentBranch : branchAt(d)));
 
     if (["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset"].includes(sub)) {
       for (const branch of branches()) {
+        if (branch === UNKNOWN) return UNKNOWN_DIR(sub);
         const problem = commitViolation(branch);
-        if (problem) return `git ${sub} blocked: ${problem}${hint}`;
+        if (problem) return `git ${sub} blocked: ${problem}`;
       }
     }
     // Plumbing and forced branch moves change a ref without running any hook.
@@ -436,13 +633,15 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
     const moved = deletes ? operands.find(isProtected) : forces && isProtected(operands[0] ?? "") ? operands[0] : null;
     if (moved) return `git ${sub} blocked: "${moved}" is a protected branch and cannot be moved, reset or deleted here.`;
     if (sub === "push") {
-      if (/\s--(all|mirror)\b/.test(segment)) return "git push --all/--mirror is forbidden.";
+      // Long options may be abbreviated; --branches is --all.
+      if (rest.some((w) => /^--(al|all|b|br|bra|bran|branc|branch|branche|branches|m|mi|mir|mirr|mirro|mirror)(=|$)/.test(w))) return "git push --all/--mirror is forbidden.";
       const heads = branches().map((b) => b ?? "");
       const refspecs = args.slice(2).map((r) => r.replace(/^\+/, "").split(":").pop()); // after "push <remote>"
       const targets = refspecs.length ? refspecs.flatMap((t) => (t === "HEAD" ? heads : [t])) : heads;
       for (const target of targets) {
+        if (target === UNKNOWN) return UNKNOWN_DIR("push");
         const problem = pushViolation(target);
-        if (problem) return `git push blocked: ${problem}${hint}`;
+        if (problem) return `git push blocked: ${problem}`;
       }
     }
   }

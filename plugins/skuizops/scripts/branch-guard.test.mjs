@@ -417,12 +417,108 @@ describe("PR #76 review round 3: four point findings", () => {
   blocked("bash -c 'git comm* -n'", "feat/a");
   blocked("bash -c 'git commit -{n,m} x'", "feat/a");
   allowed("echo 'git comm* -n'", "develop");
-  allowed("cat > /tmp/re.mjs <<'EOF'\nconst re = /git comm*/;\nEOF", "develop");
+  // round 4 (fail closed): text written to a file is read as a shell would, and `/git comm*/` is git with a glob
+  blocked("cat > /tmp/re.mjs <<'EOF'\nconst re = /git comm*/;\nEOF", "develop");
   allowed("git commit -m 'fix * and {a,b}?'", "feat/a");
   allowed("git log --oneline @{u}..HEAD", "feat/a");
   allowed("git add src/*.ts && git commit -m x", "feat/a");
   allowed("git add -- *.md", "feat/a");
   allowed("W=/abs/wt; git -C ${W} commit -m x", "develop");
+});
+
+describe("PR #76 review round 4: fail closed when the parser cannot resolve a command", () => {
+  const at = (d) => ({ "/abs/wt": "fix/x", "/abs/wt2": "fix/y", "/abs/repo": "develop" })[d] ?? null;
+  const run = (cmd, branch) => checkCommand(cmd, branch, at);
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)} on ${branch}`, () => assert.equal(run(cmd, branch), null));
+  const blocked = (cmd, branch, re = /blocked|forbidden/) => it(`blocks ${JSON.stringify(cmd)} on ${branch}`, () => assert.match(run(cmd, branch) ?? "allowed", re));
+
+  // 4661196015: hook-skipping written to a file in brace, glob or quoted form, then run by bash (now or in a later call)
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -{n,m} x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit --no-{verify,} -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit --no-{verify,} -m x\nEOF\nbash /tmp/a.sh", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -[n] -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit com* -n -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -\"n\" -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit --no-ver\"ify\" -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit \\-n -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit $F -m x\nEOF", "feat/a");
+  blocked("echo 'git commit -{n,m} x' > /tmp/a.sh", "feat/a");
+  blocked("echo 'git commit -\"n\" -m x' | tee /tmp/a.sh", "feat/a");
+  blocked("printf 'git commit -%s -m x' n > /tmp/a.sh", "feat/a");
+  blocked("echo 'git commit -\\x6e -m x' > /tmp/a.sh", "feat/a");
+  blocked("cat <<< 'git commit -\"n\" -m x' > /tmp/a.sh", "feat/a");
+  blocked("cat > /tmp/a.sh <<EOF\ngit commit $FLAG -m x\nEOF", "feat/a");
+  // the same forms run directly
+  blocked('git commit -"n" -m x', "feat/a");
+  blocked("git commit \\-n -m x", "feat/a");
+  blocked('git commit --no-"verify" -m x', "feat/a");
+  blocked('"g"it commit -n -m x', "feat/a");
+  blocked('g\\it commit --no-"verify" -m x', "feat/a");
+  blocked("bash -c 'git push --no-\"verify\" origin feat/a'", "feat/a");
+  blocked("F=-n; git commit $F -m x", "feat/a");
+  blocked('git commit "$F" -m x', "feat/a");
+  blocked("echo commit -n -m x | xargs git", "feat/a");
+  // #61: notes and PR bodies that only mention git stay data
+  allowed("cat > /tmp/x.md <<'EOF'\n# notes\ngit commit -m x\ngit push origin main\nEOF", "develop");
+  allowed("cat > /tmp/pr.md <<'EOF'\nnever git commit -{n,m} or --no-{verify,}\nEOF\ngh pr create --title t --body-file /tmp/pr.md", "develop");
+  allowed('git commit -m "$(cat <<\'EOF\'\nfix: never git commit -n\nEOF\n)"', "feat/a");
+  allowed("git commit -F - <<'EOF'\nfix: never git commit -n\nEOF", "feat/a");
+
+  // 4661198688: quoted or flag-prefixed -C / cd paths are resolved, never judged by the session's work branch
+  blocked("git -C '/abs/repo' commit -m x", "feat/a");
+  blocked('git -C "/abs/repo" commit -m x', "feat/a");
+  blocked("cd -- /abs/repo && git commit -m x", "feat/a");
+  blocked("cd -P /abs/repo && git commit -m x", "feat/a");
+  blocked("builtin cd /abs/repo && git commit -m x", "feat/a");
+  blocked("command cd /abs/repo && git commit -m x", "feat/a");
+  blocked("cd '/abs/repo' && git push -u origin HEAD", "feat/a");
+  allowed("git -C '/abs/wt' commit -m x", "develop");
+  allowed('cd "/abs/wt" && git commit -m x', "develop");
+  allowed("cd -- /abs/wt && git commit -m x", "develop");
+  allowed("builtin cd /abs/wt && git push -u origin HEAD", "develop");
+
+  // what cannot be resolved is blocked for a commit or push, whatever the session branch
+  const dir = /cannot tell which repository|literal path/;
+  blocked("cd $W && git commit -m x", "feat/a", dir);
+  blocked("cd ${W:-/abs/wt} && git commit -m x", "feat/a", dir);
+  blocked("cd ${W:+/abs/repo} && git commit -m x", "feat/a", dir);
+  blocked('git -C "$W" commit -m x', "feat/a", dir);
+  blocked("git -C ${W:-/abs/wt} commit -m x", "feat/a", dir);
+  blocked("cd wt && git commit -m x", "feat/a", dir);
+  blocked("cd - && git commit -m x", "feat/a", dir);
+  blocked("cd && git commit -m x", "feat/a", dir);
+  blocked("cd /abs/wt /abs/repo && git commit -m x", "feat/a", dir);
+  blocked("pushd /abs/repo && git commit -m x", "feat/a", dir);
+  blocked("npm test && git commit -m x", "feat/a", dir);
+  blocked("z repo && git push -u origin HEAD", "feat/a", dir);
+  blocked("cd /abs/wt && popd && git commit -m x", "feat/a", dir);
+  blocked("bash -c 'git commit -m x'", "feat/a", dir);
+  blocked("sudo git commit -m x", "feat/a", dir);
+  blocked('git commit -m "$(date)"', "feat/a", dir);
+  blocked("(cd /abs/repo && git commit -m x)", "feat/a", dir);
+  blocked("for d in /abs/wt; do git -C $d commit -m x; done", "feat/a");
+  allowed("npm test && git -C /abs/wt commit -m x", "develop");
+  allowed("git fetch && git -C /abs/wt merge origin/develop", "develop");
+  allowed("git status && git -C /abs/wt push -u origin HEAD", "develop");
+  // an expansion before the subcommand, in a risky subcommand's arguments, or in the program name
+  blocked("W='. commit -n'; git -C $W status", "feat/a");
+  blocked("git $SUB -m x", "feat/a");
+  blocked('git branch -D "$X"', "feat/a");
+  blocked("G=git; $G commit -n -m x", "feat/a");
+  blocked("${G}it commit -m x", "feat/a");
+  blocked("$(echo git) commit -m x", "feat/a");
+  blocked("X='git commit -n'; eval \"$X\"", "feat/a");
+  allowed('git commit -m "$MSG"', "feat/a");
+  allowed('git commit -F "$F"', "feat/a");
+  allowed('git add "$F" && git commit -m x', "feat/a");
+  // git config that runs a command or moves the hooks
+  blocked("git -c core.fsmonitor='git commit -n' status", "feat/a");
+  blocked("git -c core.pager='sh x' log", "feat/a");
+  blocked("git -c alias.st='!git commit -n' st", "feat/a");
+  allowed("git -c user.name=a -c color.ui=always log -1", "feat/a");
+  // push --all and --mirror abbreviated
+  blocked("git push --mirr origin", "feat/a");
+  blocked("git push --branches origin", "feat/a");
 });
 
 // The parser approximates the shell. Wherever the two disagree, an allowed command can run git. So run each
@@ -453,6 +549,13 @@ describe("issue 61/63: what the guard allows does not run git commit, merge or p
     // PR #76 review round 3: brace expansion turns these into `git commit …`
     "git com{mit,} -m x",
     "git {commit,-m,x}",
+    // round 4: quotes, backslashes and variables in the program name
+    '"g"it commit -m x',
+    "g\\it commit -m x",
+    "G=git; $G commit -m x",
+    "G=g; ${G}it commit -m x",
+    "echo commit -m x | xargs git",
+    "bash <<< 'git commit -m x'",
   ];
   for (const shell of shells) {
     for (const cmd of corpus) {
@@ -497,6 +600,17 @@ describe("PR #76 review: what the guard allows never commits in a protected dir 
     // PR #76 review round 3: git text the parser does not record next to the cd
     `cd ${repo} && : 'git x' && git commit -m x`,
     `cd ${repo} && : '!git x'; git push -u origin HEAD`,
+    // round 4: quoted and flag-prefixed paths, and commands that move the shell without a plain cd
+    `git -C '${repo}' commit -m x`,
+    `cd "${repo}" && git commit -m x`,
+    `cd -- ${repo} && git commit -m x`,
+    `cd -P ${repo} && git commit -m x`,
+    `builtin cd ${repo} && git commit -m x`,
+    `command cd ${repo} && git push -u origin HEAD`,
+    `pushd ${repo} >/dev/null && git commit -m x`,
+    `R=${repo}; cd \${R:-${wt}} && git commit -m x`,
+    `cd \${HOME:+${repo}} && git commit -m x`,
+    `cd ${wt} && cd ${repo} /nope 2>/dev/null; git commit -m x`,
   ];
   for (const shell of shells) {
     for (const cmd of corpus) {
@@ -537,6 +651,33 @@ describe("PR #76 review: what the guard allows never commits in a protected dir 
         mkdirSync(join(home, ".config", "gh"), { recursive: true });
         spawnSync(shell, ["-c", cmd], { cwd: session, env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: join(root, "log") }, encoding: "utf8" });
         if (existsSync(ghConfig)) assert.ok(checkCommand(cmd, "feat/a", at), `allowed, but the shell wrote ${ghConfig}`);
+      });
+    }
+  }
+
+  // round 4 (4661196015): a file written in one call and run in a later one. Whatever write the guard allows, running the
+  // file must never pass git a hook-skipping flag.
+  const script = join(root, "s.sh");
+  const skipWrites = [
+    "git commit -{n,m} x",
+    "git commit --no-{verify,} -m x",
+    "git commit -[n] -m x",
+    'git commit -"n" -m x',
+    "git commit \\-n -m x",
+    "git commit --no-ver'ify' -m x",
+    "F=-n; git commit $F -m x",
+    "git commit -m x",
+  ].flatMap((body) => [`cat > ${script} <<'EOF'\n${body}\nEOF`, `echo '${body.replaceAll("'", "'\\''")}' > ${script}`]);
+  for (const shell of shells) {
+    for (const w of [...skipWrites, `printf 'git commit -%s -m x\\n' n > ${script}`]) {
+      it(`${shell}: a file the guard lets be written never skips hooks when run: ${JSON.stringify(w)}`, () => {
+        const log = join(root, "log");
+        rmSync(log, { force: true });
+        rmSync(script, { force: true });
+        spawnSync(shell, ["-c", w], { cwd: session, env: { PATH: `${bin}:/usr/bin:/bin` } });
+        spawnSync(shell, [script], { cwd: session, env: { PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: log } });
+        const ran = existsSync(log) ? readFileSync(log, "utf8") : "";
+        if (/ commit .*(^| )(-[a-zA-Z]*n[a-zA-Z]*|--no-v\S*)( |$)/m.test(ran)) assert.ok(checkCommand(w, "feat/a", at), `allowed, but running the file ran: git ${ran}`);
       });
     }
   }

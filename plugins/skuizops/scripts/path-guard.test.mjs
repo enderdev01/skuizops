@@ -183,6 +183,50 @@ describe("commandViolation", () => {
     assert.equal(ghCheck("gh pr view 1 > /tmp/pr.txt"), null);
   });
 
+  describe("PR #76 review round 4: an expansion or dir it cannot resolve is never guessed", () => {
+    const ghEnv = { HOME: home, GH_CONFIG_DIR: join(home, "ghc") };
+    const ghCheck = (command) => commandViolation(command, { project: app, cwd: app, env: ghEnv });
+    const gh = join(home, ".config", "gh");
+    for (const c of [
+      // 4661196020: with the variable set the shell uses the word, not the value
+      `cd /tmp && cd \${HOME:+${gh}} && echo 'pager: sh' > config.yml`,
+      `cd /tmp && cd \${HOME+${gh}} && echo 'pager: sh' > config.yml`,
+      `echo 'pager: sh' > \${HOME:+${gh}}/config.yml`,
+      `cd \${GH_CONFIG_DIR:-/tmp} && echo 'pager: sh' > config.yml`,
+      // 4661198694: operators the guard does not expand
+      "echo 'pager: sh' > ${GH_CONFIG_DIR:0}/config.yml",
+      "echo 'pager: sh' > ${GH_CONFIG_DIR#}/config.yml",
+      "echo 'pager: sh' > ${GH_CONFIG_DIR%/}/config.yml",
+      "echo 'pager: sh' > ${GH_CONFIG_DIR/x/x}/config.yml",
+      "echo 'pager: sh' > ${GH_CONFIG_DIR: -3}/config.yml",
+      "tee ${GH_CONFIG_DIR##*/}/config.yml <<'EOF'\npager: sh\nEOF",
+      "cd ${GH_CONFIG_DIR:0} && echo 'pager: sh' > config.yml",
+      // special parameters, substitutions, brace lists, ~+ / ~user
+      "echo x > ~/.$0rc",
+      "echo x >> ~/.${0}rc",
+      "echo x > `echo ~/.zshrc`",
+      'echo x > "$(echo ~)/.zshrc"',
+      "touch ~/.config/{gh,zz}/config.yml",
+      "echo x > ~+/.githooks/pre-commit",
+      // 4661198688 in path-guard: flag-prefixed cd, and dir changes it cannot follow
+      "cd -- ~/.config/gh && echo 'pager: sh' > config.yml",
+      "builtin cd ~/.config/gh && echo 'pager: sh' > config.yml",
+      "cd -P ~/.config/gh && echo 'pager: sh' > config.yml",
+      "cd /tmp && popd && echo 'pager: sh' > config.yml",
+      'cd /tmp && eval "cd ~/.config/gh" && echo x > config.yml',
+      "cd - && echo x > config.yml",
+      "cd $(echo ~/.config/gh) && echo x > config.yml",
+    ]) it(`blocks ${JSON.stringify(c)}`, () => assert.ok(ghCheck(c)));
+    for (const c of [
+      "echo x > ${TMPDIR:-/tmp}/notes.txt",
+      "echo x > /tmp/out-$$.log",
+      "cd /tmp && echo x > notes.txt",
+      "cd -- /tmp && echo x > notes.txt",
+      "cd \"$(mktemp -d)\" && git status",
+      "echo x > src/a.ts",
+    ]) it(`allows ${JSON.stringify(c)}`, () => assert.equal(ghCheck(c), null));
+  });
+
   // cherry rounds 1-2 (zsh `>!`, `&>|`): run every write syntax in the real shells; whatever path-guard allows must not touch gh's config.
   describe("what path-guard allows does not write gh's config in a real shell", () => {
     const ghFile = join(home, ".config", "gh", "config.yml");
