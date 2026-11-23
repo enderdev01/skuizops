@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sources } from "./install-hooks.mjs";
+import { isNewer } from "./update-check.mjs";
 import { inScope, isMain, isTrusted, mainWorktree, projectDir, real, sessionDir } from "./scope.mjs";
 
 const ID = "skuizops@juicebar";
@@ -66,7 +67,7 @@ function agentRow({ settings, problem }, pluginRoot, session) {
 }
 
 // Problems of the git hooks and of the guard copies, compared by content with what the plugin installs now.
-function hookProblems(project) {
+function hookProblems(project, pluginVersion) {
   const hooks = [];
   const guards = [];
   const path = spawnSync("git", ["-C", project, "config", "--local", "--get", "core.hooksPath"], { encoding: "utf8" });
@@ -74,6 +75,8 @@ function hookProblems(project) {
   // The manifest is untracked: a linked worktree reads the one of its main worktree.
   const manifest = readJson(join(project, ".githooks", ".skuizops.json")) ?? readJson(join(mainWorktree(project) ?? project, ".githooks", ".skuizops.json"));
   if (!manifest?.files) return { hooks: [...hooks, "no .githooks/.skuizops.json manifest"], guards: ["no manifest"] };
+  // The plugin's copies are older than what is installed: comparing against them would call newer files outdated.
+  if (isNewer(manifest.version, pluginVersion)) return { hooks, guards: [], installedBy: manifest.version, newer: true };
   for (const { from, rel, mode } of sources()) {
     const file = join(project, rel);
     const isGuard = rel.startsWith("scripts/guard/");
@@ -114,7 +117,8 @@ const rootRow = (project, session) =>
 export function check({ project, session = project, home = homedir(), env = process.env, pluginRoot = fileURLToPath(new URL("..", import.meta.url)), host = "claude" }) {
   const { version } = readJson(join(pluginRoot, ".claude-plugin", "plugin.json")) ?? {};
   const config = projectSettings(session);
-  const { hooks, guards, installedBy } = hookProblems(project);
+  const { hooks, guards, installedBy, newer } = hookProblems(project, version);
+  const update = `installed by v${installedBy}, newer than the plugin v${version}: update the plugin with claude plugin marketplace update juicebar, then claude plugin update skuizops@juicebar`;
   const installed = readJson(join(home, ".claude", "plugins", "installed_plugins.json"))?.plugins;
   const old = oldNames(project, home, config, installed);
   const where = real(project) === real(session) ? undefined : session;
@@ -122,8 +126,10 @@ export function check({ project, session = project, home = homedir(), env = proc
   return [
     ...rootRow(project, session),
     ...claudeOnly,
-    hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
-    guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
+    newer
+      ? fail("git hooks", `${update}${hooks.length ? ` (${hooks.join("; ")})` : ""}`)
+      : hooks.length ? fail("git hooks", `${HOOKS} (${hooks.join("; ")})`) : ok("git hooks", installedBy === version ? undefined : `installed by v${installedBy}, identical to v${version}`),
+    newer ? fail("project guards", update) : guards.length ? fail("project guards", `${HOOKS} (${guards.join("; ")})`) : ok("project guards"),
     isTrusted(project, { ...env, HOME: home }) ? ok("trusted project") : fail("trusted project", "/skuizops:trust"),
     old.length ? fail("old-name leftovers", old.join("; ")) : ok("old-name leftovers"),
     info("effective language", env.SKUIZOPS_LANG || "es (default)"),

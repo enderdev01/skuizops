@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "./scope.mjs";
+import { isNewer } from "./update-check.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const templates = join(here, "..", "templates", "githooks");
@@ -39,9 +40,17 @@ export function installHooks(dir, env = process.env) {
   mkdirSync(guard, { recursive: true });
   const manifestFile = join(hooks, ".skuizops.json");
   let old = {};
+  let installedBy;
   try {
-    old = JSON.parse(readFileSync(manifestFile, "utf8")).files ?? {};
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    old = manifest.files ?? {};
+    installedBy = manifest.version;
   } catch {}
+  const { version } = JSON.parse(readFileSync(join(here, "..", ".claude-plugin", "plugin.json"), "utf8"));
+  // Never overwrite newer guards with this older plugin's copies.
+  if (isNewer(installedBy, version)) {
+    throw new Error(`hooks in ${root} were installed by skuizops v${installedBy}, newer than this plugin (v${version}). Update the plugin instead: claude plugin marketplace update juicebar, then claude plugin update skuizops@juicebar, and restart the session.`);
+  }
   const files = {};
   const when = stamp();
   const put = (from, to, mode) => {
@@ -78,7 +87,6 @@ export function installHooks(dir, env = process.env) {
   git(root, "config", "core.hooksPath", ".githooks");
   if (previous && previous !== ".githooks") actions.push(`Replaced the previous hooks path "${previous}"`);
   actions.push("Pointed git at .githooks");
-  const { version } = JSON.parse(readFileSync(join(here, "..", ".claude-plugin", "plugin.json"), "utf8"));
   writeFileSync(manifestFile, `${JSON.stringify({ version, files }, null, 2)}\n`);
   return { root, actions, backups };
 }

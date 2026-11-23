@@ -84,6 +84,24 @@ describe("installHooks", () => {
     assert.equal(readFileSync(join(dir, ".githooks", "pre-commit"), "utf8"), readFileSync(join(templates, "pre-commit"), "utf8"));
   });
 
+  it("refuses to downgrade hooks installed by a newer plugin, writing nothing", () => {
+    const dir = repo();
+    installHooks(dir);
+    const guardFile = join(dir, "scripts", "guard", "branch-guard.mjs");
+    const manifestFile = join(dir, ".githooks", ".skuizops.json");
+    writeFileSync(guardFile, "newer guard");
+    const m = manifest(dir);
+    m.version = "999.0.0";
+    m.files["scripts/guard/branch-guard.mjs"] = createHash("sha256").update("newer guard").digest("hex");
+    writeFileSync(manifestFile, JSON.stringify(m));
+    const before = readFileSync(manifestFile, "utf8");
+    assert.throws(() => installHooks(dir), /newer/);
+    assert.equal(readFileSync(guardFile, "utf8"), "newer guard");
+    assert.equal(readFileSync(manifestFile, "utf8"), before);
+    assert.deepEqual(backupsOf(dir), []);
+    assert.deepEqual(readdirSync(join(dir, "scripts", "guard")).filter((f) => f.includes(".local-")), []);
+  });
+
   it("reports a previous, different hooks path", () => {
     const dir = repo();
     execFileSync("git", ["-C", dir, "config", "core.hooksPath", ".husky"]);
