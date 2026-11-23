@@ -2,7 +2,7 @@
 //   node path-guard.mjs        (Edit|Write|NotebookEdit) checks the target file
 //   node path-guard.mjs bash   (Bash) checks the shell command, best effort
 // Protected anywhere: the skuizops config dir (trust list), the installed plugins, the user's
-// Claude settings, git config and shell profiles; a directory-marketplace source repo, unless the session is opened in it.
+// Claude settings, git and gh config and shell profiles; a directory-marketplace source repo, unless the session is opened in it.
 // Protected under the scope roots (~/DEV): any .githooks/, scripts/guard/ or .git/ path and any
 // .claude/settings*.json, in any project.
 // The human edits these by hand.
@@ -30,7 +30,9 @@ export function editViolation(file, project, env = process.env) {
   }
   const homeFiles = [[".claude", "settings.json"], [".claude", "settings.local.json"], [".gitconfig"], ...PROFILES.map((p) => [p])];
   const home = (...parts) => fold(join(env.HOME ?? "", ...parts));
-  if (homeFiles.some((parts) => target === home(...parts)) || under(target, home(".config", "git"))) {
+  // gh runs aliases, extensions and its pager, editor and browser from its config dir.
+  const ghDirs = [home(".config", "gh"), env.GH_CONFIG_DIR && fold(env.GH_CONFIG_DIR), env.XDG_CONFIG_HOME && fold(join(env.XDG_CONFIG_HOME, "gh"))];
+  if (homeFiles.some((parts) => target === home(...parts)) || [home(".config", "git"), ...ghDirs].some((dir) => dir && under(target, dir))) {
     return `${file} is a protected user file. Agents cannot change it: ask the human to edit it.`;
   }
   const roots = scopeRoots(env).map(fold);
@@ -82,9 +84,42 @@ function runsSetup(words, depth = 0) {
 }
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
-// shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
-const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST)\b/.test(unquote(w));
-const subst = (w) => /^\$SUBST/.test(unquote(w));
+// shortcut: a leading plain $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
+const unknownVar = (w) => /^\$(\w|\{\w+\})/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST|GH_CONFIG_DIR|XDG_CONFIG_HOME)\b/.test(unquote(w));
+// Fail closed (PR #76 round 4): a directory the guard cannot resolve. A relative path from it is never judged.
+const UNKNOWN = "\u0000unresolved";
+const UNRESOLVED_MSG = (w) => `the path ${w} holds an expansion the guard cannot resolve (\${…} beyond a default, $0 and other special parameters, $(…), a brace list, ~+ or ~user), or is relative to a directory it cannot resolve. Write the path literally.`;
+const relative = (u) => !/^(\/|~|\$)/.test(u) || /^\$(PWD\b|\{PWD\})/.test(u);
+
+// The words an unquoted shell word may become, or null when it holds an expansion this guard does not resolve.
+// A leading `${NAME<op>word}` with op - = + ? (optionally after `:`) gives each value it may take: NAME's (or a plain
+// `$NAME` when the guard does not know it) or the word, and with `+` the word or nothing, never NAME's value.
+function choices(u, { here, env, readOnly }) {
+  const op = /^\$\{([A-Za-z_]\w*)(:?)([-=?+])/.exec(u);
+  if (op) {
+    let e = op[0].length;
+    for (let depth = 1; e < u.length && depth; e++) depth += u[e] === "{" ? 1 : u[e] === "}" ? -1 : 0;
+    if (u[e - 1] !== "}") return null;
+    const value = op[1] === "PWD" ? (here === UNKNOWN ? undefined : here) : op[1] === "HOME" ? env.HOME : env[op[1]];
+    const v = value ?? `$${op[1]}`;
+    const word = u.slice(op[0].length, e - 1);
+    const tail = u.slice(e), picks = op[3] === "+" ? [word, ""] : op[3] === "?" ? [v] : [v, word];
+    if (!choices(`x${tail}`, { here, env, readOnly })) return null;
+    const out = [];
+    for (const [k, p] of picks.entries()) {
+      // NAME's value is used as it is: the shell does not expand it again.
+      const c = k === 0 && op[3] !== "+" && value !== undefined ? [p + tail] : choices(p + tail, { here, env, readOnly });
+      if (!c) return null;
+      out.push(...c);
+    }
+    return out;
+  }
+  if (/\$\{(?![A-Za-z_]\w*\})/.test(u)) return null; // `${VAR:0}`, `${VAR#x}`, `${VAR/a/b}`, `${#VAR}`, zsh `${(f)VAR}`...
+  if (/\$(?![A-Za-z_{])/.test(u.replace(/\$[$?!#](?!\w)/g, ""))) return null; // `$0`, `$1`, `$@`, zsh `$~VAR` `$=VAR`...; `$$` `$?` are digits
+  if (/\$SUBST/.test(readOnly ? u.replace(/^\$SUBST/, "") : u)) return null; // `$(…)` or backticks
+  if (/\{[^{}]*(,|\.\.)[^{}]*\}/.test(u) || /^~[^/]/.test(u)) return null; // brace lists; `~+`, `~-`, `~user`
+  return [u];
+}
 
 // Heredoc bodies are data, not shell: drop them, but an unquoted one still runs `$(...)` and backticks, so keep those as lines.
 // `<<` inside quotes is text; an unterminated heredoc is not one we understand, so nothing is dropped (fail closed).
@@ -127,10 +162,18 @@ function hideQuotedRedirects(s) {
   return out;
 }
 
-// Each `$(...)` becomes one word in its segment (`$MKTEMP` for mktemp, else `$SUBST`); its inner command is returned as its own segment.
+// Each `$(...)` or backtick substitution becomes one word in its segment (`$MKTEMP` for mktemp, else `$SUBST`); its inner command is returned as its own segment.
 function takeSubstitutions(s, inner = []) {
   let out = "";
   for (let i = 0; i < s.length; i++) {
+    if (s[i] === "`") {
+      const j = s.indexOf("`", i + 1) === -1 ? s.length : s.indexOf("`", i + 1);
+      const body = s.slice(i + 1, j);
+      inner.push(body);
+      out += /^\s*mktemp\b/.test(body) ? "$MKTEMP" : "$SUBST";
+      i = j;
+      continue;
+    }
     if (s[i] !== "$" || s[i + 1] !== "(") { out += s[i]; continue; }
     let depth = 1, j = i + 2;
     while (j < s.length && depth) { if (s[j] === "(") depth++; else if (s[j] === ")") depth--; j++; }
@@ -237,7 +280,7 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   const inlineWrite = toolEditsOnly && INLINE_CODE.test(command) && FILE_WRITE_API.test(command);
   const flat = hideQuotedRedirects(stripHeredocs(command))
     .replace(/\d*>&(\d+|-)(?![^\s;&|)<>])/g, " ") // `2>&1`, `>&-`: fd duplication, not a file
-    .replace(/&>>?|>[|&]/g, ">"); // `&>`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
+    .replace(/&>>?[|!]?|>[|&]/g, ">"); // `&>`, `&>|`, `>|`, `>&word` are file redirections: keep them from being cut by the split below
   const inner = [];
   const text = takeSubstitutions(flat, inner);
   const segments = [text, ...inner].join("\n").split(/\n|;|&|\||\(|\)|`/);
@@ -247,39 +290,69 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   if (MENTIONS_INSTALL_HOOKS.test(unquote(command)) && !onlyReads) return "Only the human installs the hooks. Ask them to type /skuizops:install-hooks.";
   if (MENTIONS_PUBLISH.test(unquote(command)) && !onlyReads) return "Only the human publishes the repo. Ask them to run /skuizops:publish.";
   let here = cwd ?? process.cwd();
-  const clean = (word, from = here) => {
+  const picks = (word) => choices(unquote(word), { here, env, readOnly });
+  // One word the shell may produce, as absolute paths (a glob also as the paths it matches). Never called from UNKNOWN with a relative word.
+  const clean = (u, from = here) => {
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
-    const w = unquote(word).replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here);
-    return /[*?[]/.test(w) ? globSync(w, { cwd: from }).map((m) => resolve(from, m)).concat(resolve(from, w)) : [resolve(from, w)];
+    const w = u.replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here).replace(/^\$(?:(GH_CONFIG_DIR|XDG_CONFIG_HOME)|\{(GH_CONFIG_DIR|XDG_CONFIG_HOME)\})(?=\/|$)/, (m, a, b) => env[a ?? b] ?? "");
+    const dir = from === UNKNOWN ? "/" : from; // only absolute words reach here from UNKNOWN
+    return /[*?[]/.test(w) ? globSync(w, { cwd: dir }).map((m) => resolve(dir, m)).concat(resolve(dir, w)) : [resolve(dir, w)];
   };
-  const dirOf = (word, from) => (unknownVar(word) ? resolve("/", unquote(word)) : clean(word, from)[0]);
+  // The one directory a word names, else UNKNOWN: an expansion it cannot resolve, several choices, a glob.
+  const dirOf = (word, from) => {
+    const p = picks(word);
+    if (!p || p.length !== 1 || /[*?[]/.test(p[0]) || (from === UNKNOWN && relative(p[0]))) return UNKNOWN;
+    return unknownVar(p[0]) ? resolve("/", p[0]) : clean(p[0], from)[0];
+  };
+  // Where `cd`/`pushd` leaves the shell: `-L`, `-P` and `--` are read; `-`, `+N`, no operand for pushd or two operands are not resolved.
+  const cdTo = ([name, ...args]) => {
+    while (/^-[LPe@]+$/.test(args[0] ?? "")) args = args.slice(1);
+    if (args[0] === "--") args = args.slice(1);
+    if (args.length > 1 || /^[-+]/.test(args[0] ?? "") || (name === "pushd" && !args.length)) return UNKNOWN;
+    return dirOf(args[0] ?? "~", here);
+  };
   const unhide = (s) => s.replaceAll("\u0001", ">");
+  const inTemp = (path) => path !== UNKNOWN && [env.TMPDIR ?? tmpdir(), "/tmp"].some((t) => under(fold(real(path)), fold(real(t))));
   for (const segment of segments) {
-    const redirects = [...segment.matchAll(/\d*>>?\|?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
-    const words = unhide(segment.replace(/\d*>>?\|?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
+    // `>|` and zsh `>!` write past noclobber.
+    const redirects = [...segment.matchAll(/\d*>>?[|!]?\s*([^\s<>]+)/g)].map((m) => unhide(m[1]));
+    const words = unhide(segment.replace(/\d*>>?[|!]?\s*[^\s<>]*/g, " ")).trim().split(/\s+/).filter(unquote);
     if (runsSetup(words)) return "Only the human runs the setup. Ask them to run: npx github:enderdev01/skuizops";
-    if (["cd", "pushd"].includes(words[0])) here = dirOf(words[1] ?? "~", here);
+    const head = commandWords(words);
+    const shellCmd = head[0] === "builtin" ? head.slice(1) : head;
+    if (["cd", "pushd"].includes(shellCmd[0])) here = cdTo(shellCmd);
+    // shortcut: functions, aliases and zsh autocd that change dir are not seen, upgrade if an agent abuses them.
+    else if (["popd", "eval", "source", "."].includes(shellCmd[0])) here = UNKNOWN;
     const git = gitCall(words);
     const base = git ? git.dirs.reduce((dir, d) => dirOf(d, dir), here) : here;
     // cherry may drop its own mktemp copies: a worktree under the temp dir (or behind a $VAR, see unknownVar) holds no one's work.
-    const inTemp = (path) => [env.TMPDIR ?? tmpdir(), "/tmp"].some((t) => under(fold(real(path)), fold(real(t))));
-    const tempCopy = (w) => !!w && (unknownVar(w) || inTemp(dirOf(w, base)));
+    const tempCopy = (w) => {
+      const p = w && picks(w);
+      return !!p && p.every((x) => unknownVar(x) || (!(base === UNKNOWN && relative(x)) && clean(x, base).every(inTemp)));
+    };
     if (readOnly && git?.sub === "worktree" && git.rest[0] === "remove" && tempCopy(git.rest.slice(1).find((a) => !a.startsWith("-")))) continue;
-    if (readOnly && git && under(fold(base), fold(project)) && gitMutates(git)) return CHERRY_MSG;
+    if (readOnly && git && (base === UNKNOWN || under(fold(base), fold(project))) && gitMutates(git)) return CHERRY_MSG;
     for (const [word, from] of [...redirects.map((w) => [w, here]), ...writtenWords(words).map((w) => [w, base])]) {
-      if (!unquote(word) || (readOnly ? unknownVar(word) : subst(word))) continue;
-      for (const path of clean(word, from)) {
-        if (readOnly && under(fold(path), fold(project))) return CHERRY_MSG;
-        const problem = editViolation(path, project, env);
-        if (problem) return problem;
+      if (!unquote(word)) continue;
+      const p = picks(word);
+      if (!p || (from === UNKNOWN && p.some(relative))) return UNRESOLVED_MSG(word);
+      for (const u of p) {
+        if (readOnly && unknownVar(u)) continue;
+        for (const path of clean(u, from)) {
+          if (readOnly && under(fold(path), fold(project))) return CHERRY_MSG;
+          const problem = editViolation(path, project, env);
+          if (problem) return problem;
+        }
       }
     }
     if (toolEditsOnly) {
       const name = basename(commandWords(words)[0] ?? "");
       for (const word of [...redirects, ...(["tee", "sed", "perl"].includes(name) ? writtenWords(words) : [])]) {
-        // shortcut: a leading unknown $VAR is assumed to be a temp dir, upgrade if mango abuses it.
-        if (!unquote(word) || unknownVar(word)) continue;
-        if (clean(word, here).some((path) => !inTemp(path) && !under(fold(path), "/dev"))) return MANGO_MSG;
+        // shortcut: a leading unknown $VAR is assumed to be a temp dir, upgrade if mango abuses it. Unresolved words were refused above.
+        for (const u of (unquote(word) && picks(word)) || []) {
+          if (unknownVar(u)) continue;
+          if (clean(u, here).some((path) => !inTemp(path) && !under(fold(path), "/dev"))) return MANGO_MSG;
+        }
       }
     }
   }
