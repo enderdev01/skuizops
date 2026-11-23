@@ -165,7 +165,20 @@ describe("commandViolation", () => {
       "echo 'pager: sh' &>| ~/.config/gh/config.yml",
       "echo 'pager: sh' &>>| ~/.config/gh/config.yml",
       "echo 'pager: sh' &>! ~/.config/gh/config.yml",
+      // PR #76 review round 3: parameter expansion with a default
+      "echo 'pager: sh' > ${GH_CONFIG_DIR:-$HOME/.config/gh}/config.yml",
+      'echo \'pager: sh\' > "${GH_CONFIG_DIR:-$HOME/.config/gh}/config.yml"',
+      "echo 'pager: sh' > ${GH_CONFIG_DIR-~/.config/gh}/config.yml",
+      "echo 'pager: sh' > ${XDG_CONFIG_HOME:-$HOME/.config}/gh/config.yml",
+      "echo 'pager: sh' > ${XDG_CONFIG_HOME:=${HOME}/.config}/gh/config.yml",
+      "echo 'pager: sh' > ${UNSET_VAR:-$HOME/.config/gh}/config.yml",
+      "tee ${GH_CONFIG_DIR:-$HOME/.config/gh}/config.yml <<'EOF'\npager: sh\nEOF",
     ]) assert.match(ghCheck(c) ?? "allowed", /protected user file/, c);
+    // the env value is not the only choice: with GH_CONFIG_DIR unset the default is the one written
+    const unset = (command) => commandViolation(command, { project: app, cwd: app, env: { HOME: home } });
+    assert.match(unset("echo 'pager: sh' > ${GH_CONFIG_DIR:-$HOME/.config/gh}/config.yml") ?? "allowed", /protected user file/);
+    assert.match(unset("echo 'pager: sh' > ${XDG_CONFIG_HOME:-$HOME/.config}/gh/hosts.yml") ?? "allowed", /protected user file/);
+    assert.equal(unset("echo x > ${TMPDIR:-/tmp}/notes.txt"), null);
     assert.equal(ghCheck("cat ~/.config/gh/config.yml"), null);
     assert.equal(ghCheck("gh pr view 1 > /tmp/pr.txt"), null);
   });

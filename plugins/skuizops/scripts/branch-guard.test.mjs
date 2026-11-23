@@ -374,6 +374,57 @@ describe("PR #76 review: a gh config written in the same command is not data", (
   });
 });
 
+describe("PR #76 review round 3: four point findings", () => {
+  const at = (d) => ({ "/abs/wt": "fix/x", "/abs/repo": "develop" })[d] ?? null;
+  const run = (cmd, branch) => checkCommand(cmd, branch, at);
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)} on ${branch}`, () => assert.equal(run(cmd, branch), null));
+  const blocked = (cmd, branch, re = /blocked|forbidden/) => it(`blocks ${JSON.stringify(cmd)} on ${branch}`, () => assert.match(run(cmd, branch) ?? "allowed", re));
+
+  // 1. a git the parser did not record (`!git`, text an unknown gh subcommand or another command gets) next to a cd / -C
+  // into a protected repo: never judged by the session's work branch
+  blocked("cd /abs/repo && gh alias set x '!git status' && git commit -m x", "feat/a");
+  blocked("cd /abs/repo && gh foo 'git x' && git commit -m x", "feat/a");
+  blocked("cd /abs/repo && echo '!git log' > ~/.config/gh/config.yml && gh pr list && git commit -m x", "feat/a");
+  blocked("git -C /abs/repo commit -m x && gh my-ext 'git status'", "feat/a");
+  blocked("cd /abs/repo && : 'git x' && git push -u origin HEAD", "feat/a");
+  // the parser saw every git: each is still judged by its own dir
+  allowed("cd /abs/wt && gh pr create --title t --body 'git commit' && git push -u origin HEAD", "develop");
+
+  // 2. hook-skipping git written to a file can be run by a later call
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit --no-verify -m x\nEOF\nbash /tmp/a.sh", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit --no-verify -m x\nEOF", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -n -m x\nEOF\nbash /tmp/a.sh", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit commit -n -m x\nEOF", "feat/a");
+  blocked("tee /tmp/a.sh <<'EOF'\ngit commit --no-verify -m x\nEOF\nsh /tmp/a.sh", "feat/a");
+  blocked("tee /tmp/a.sh >/dev/null <<'EOF'\ngit commit -n -m x\nEOF", "feat/a");
+  blocked("echo 'git commit -n -m x' | tee /tmp/a.sh", "feat/a");
+  blocked("printf '%s\\n' 'git commit --no-verify -m x' > /tmp/a.sh", "feat/a");
+  blocked("cat > /tmp/a.sh <<'EOF'\ngit config core.hooksPath /dev/null\nEOF", "feat/a");
+  // #61: a PR body or notes that only mention git stay data
+  allowed("cat > /tmp/pr.md <<'EOF'\nRun git commit; then git push origin main.\nEOF\ngh pr create --title t --body-file /tmp/pr.md", "develop");
+  allowed("cat > /tmp/pr.md <<'EOF'\nnever git commit --no-verify\nEOF\ngh pr create --title t --body-file /tmp/pr.md", "develop");
+  allowed("cat > /tmp/pr.md <<'EOF'\nnever git commit -n\nEOF\ngh pr create --title t -F /tmp/pr.md", "develop");
+  allowed("cat > /tmp/x.md <<'EOF'\n# notes\ngit commit -m x\nEOF", "develop");
+
+  // 3. the shell expands an unquoted glob or brace in a git word
+  blocked("git comm* -n", "feat/a");
+  blocked("git com* -n -m x", "feat/a");
+  blocked("git com{mit} -n", "feat/a");
+  blocked("git com{mit,} -n -m x", "feat/a");
+  blocked("git c?mmit -m x", "develop");
+  blocked("git commit -{n,m} x", "feat/a");
+  blocked("git commit -[n] -m x", "feat/a");
+  blocked("bash -c 'git comm* -n'", "feat/a");
+  blocked("bash -c 'git commit -{n,m} x'", "feat/a");
+  allowed("echo 'git comm* -n'", "develop");
+  allowed("cat > /tmp/re.mjs <<'EOF'\nconst re = /git comm*/;\nEOF", "develop");
+  allowed("git commit -m 'fix * and {a,b}?'", "feat/a");
+  allowed("git log --oneline @{u}..HEAD", "feat/a");
+  allowed("git add src/*.ts && git commit -m x", "feat/a");
+  allowed("git add -- *.md", "feat/a");
+  allowed("W=/abs/wt; git -C ${W} commit -m x", "develop");
+});
+
 // The parser approximates the shell. Wherever the two disagree, an allowed command can run git. So run each
 // command in the real shells with a `git` shim: whatever the guard allows must never reach git commit/merge/push.
 describe("issue 61/63: what the guard allows does not run git commit, merge or push in a real shell", async () => {
@@ -399,6 +450,9 @@ describe("issue 61/63: what the guard allows does not run git commit, merge or p
     "printf '-v' x %s 'a[$(git commit -m x)]'; echo $[x]",
     "cat <<'A' <<'B'\ngit commit\nA\ngit push origin main\nB",
     "echo x; cat <<'EOF'\nEOF\ngit merge feat/x",
+    // PR #76 review round 3: brace expansion turns these into `git commit …`
+    "git com{mit,} -m x",
+    "git {commit,-m,x}",
   ];
   for (const shell of shells) {
     for (const cmd of corpus) {
@@ -440,6 +494,9 @@ describe("PR #76 review: what the guard allows never commits in a protected dir 
     `cd ${wt} || cd ${wt2} && git commit -m x`,
     `cd ${wt} && git commit -m x`,
     `cd ${wt} || cd ${repo} && git -C ${wt2} commit -m x`,
+    // PR #76 review round 3: git text the parser does not record next to the cd
+    `cd ${repo} && : 'git x' && git commit -m x`,
+    `cd ${repo} && : '!git x'; git push -u origin HEAD`,
   ];
   for (const shell of shells) {
     for (const cmd of corpus) {

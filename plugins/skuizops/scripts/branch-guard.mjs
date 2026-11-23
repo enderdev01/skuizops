@@ -158,7 +158,11 @@ function parseShell(command) {
       pending.push({ dash: !!m[1], quoted: !!m[2], word: m[3], owner: open() });
       cur.words.push({ raw: m[0], quoted: true, start: i, end: i + m[0].length });
       i += m[0].length - 1;
-    } else word(i).raw += c;
+    } else {
+      // The shell expands an unquoted glob or brace (`comm*`, `com{mit,}`): the word may not be what it reads. `${` is a variable.
+      if ("*?[".includes(c) || (c === "{" && src[i - 1] !== "$")) word(i).glob = true;
+      word(i).raw += c;
+    }
   }
   flush(src.length);
   return pending.length ? null : { src, cmds, cuts };
@@ -217,23 +221,46 @@ function outTarget(words, k) {
 // gh reads its config on every run: aliases, extensions, pager, editor, browser. A file written in the same command
 // may be that config unless it is a plain literal path outside any `gh` dir and not named config.yml or hosts.yml.
 const MAY_BE_GH_CONFIG = (t) => /[$`\\*?[{]|^~(?!\/)/.test(t) || /(^|\/)gh(\/|$)|(^|\/)(config|hosts)\.ya?ml$/i.test(t.replace(/["']/g, ""));
-const writesGhConfig = (p) =>
-  p.cmds.some((c) => argv(c.words)[0]?.raw === "gh") &&
-  p.cmds.some((c) => {
+// The files a command writes: `tee` operands and redirect targets.
+function writeTargets(c) {
+  const a = argv(c.words);
+  const tee = a[0]?.raw === "tee" ? a.slice(1).filter((w) => !w.raw.startsWith("-")).map((w) => w.raw) : [];
+  return [...tee, ...c.words.map((_, k) => outTarget(c.words, k))].filter((t) => t !== undefined);
+}
+const writesGhConfig = (p) => p.cmds.some((c) => argv(c.words)[0]?.raw === "gh") && p.cmds.some((c) => writeTargets(c).some(MAY_BE_GH_CONFIG));
+
+// Commands whose text lands in a file, directly or through a pipe: that file can be run later (`bash file` in the next
+// call), so the hook-skipping flags are looked for in their text too. A file gh reads as a PR/issue/release body is not.
+// shortcut: a body file can still be run by a later call, upgrade if an agent abuses it.
+function fileWriters(p) {
+  const bodies = new Set();
+  for (const c of p.cmds) {
     const a = argv(c.words);
-    const tee = a[0]?.raw === "tee" ? a.slice(1).filter((w) => !w.raw.startsWith("-")).map((w) => w.raw) : [];
-    return [...tee, ...c.words.map((_, k) => outTarget(c.words, k))].some((t) => t !== undefined && MAY_BE_GH_CONFIG(t));
-  });
+    if (a[0]?.raw !== "gh") continue;
+    a.forEach((w, k) => {
+      const glued = /^--(?:body|notes)-file=(.+)$/.exec(w.raw);
+      if (glued) bodies.add(glued[1]);
+      else if (/^(--body-file|--notes-file|-F)$/.test(w.raw) && a[k + 1]) bodies.add(a[k + 1].raw);
+    });
+  }
+  const out = new Set();
+  for (let n = p.cmds.length - 1; n >= 0; n--) {
+    const c = p.cmds[n], next = p.cmds[n + 1];
+    if (writeTargets(c).some((t) => !bodies.has(t) && !/^\/dev\/(null|stdout|stderr)$/.test(t)) || (next?.sep === "|" && out.has(next))) out.add(c);
+  }
+  return out;
+}
 
 // The command with data removed: every argument of an inert command, heredoc bodies fed to one, and comments.
 // Only when every command is inert, git, or an assignment, so no removed text can reach a shell. Else null.
-function dataOnly(p) {
+// The text of the commands in `keep` stays.
+function dataOnly(p, keep = new Set()) {
   if (!p.cmds.every((c) => kind(c) !== "other") || !pipesOk(p) || p.cuts.some((c) => c.owner && kind(c.owner) !== "inert")) return null;
   if (writesGhConfig(p)) return null;
-  const spans = p.cuts.map((c) => [c.start, c.end, ""]);
+  const spans = p.cuts.filter((c) => !keep.has(c.owner)).map((c) => [c.start, c.end, ""]);
   for (const c of p.cmds) {
     const head = argv(c.words)[0];
-    if (kind(c) !== "inert" || head.raw === "cd") continue;
+    if (kind(c) !== "inert" || head.raw === "cd" || keep.has(c)) continue;
     for (const w of c.words) if (w !== head) spans.push([w.start, w.end, "\u0001"]);
   }
   let out = "", at = 0;
@@ -306,6 +333,23 @@ function gitDirs(p) {
 }
 
 const HINT = " (the target dir could not be read from this command: pass the literal path, as in git -C <path> … or cd <path> && git …)";
+const GLOB = "git blocked: the shell expands an unquoted glob or brace (* ? [ {) in this git command, so git may get another subcommand or option. Quote the word or write it out; put file globs after --.";
+
+// Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
+// each segment is inspected. Redirections are removed first: `2>&1` and `> file` are not refspecs.
+const segmentsOf = (t) => t.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/);
+const wordsOf = (s) => s.trim().split(/\s+/);
+// `!git` is how a gh or git alias runs shell.
+const gitIn = (ws) => ws.findIndex((w) => w === "git" || w === "!git" || w.endsWith("/git"));
+// The words after `git` that the shell may expand into another subcommand, an option or more words: a glob or brace in
+// the subcommand or before it, or one that can expand to a leading `-` or (braces) to several words. `glob(k)` says
+// whether word k is unquoted; file globs after `--` are only paths.
+function expands(words, glob = () => true) {
+  let sub = 0;
+  while (sub < words.length && words[sub].startsWith("-")) sub += GIT_OPTIONS_WITH_VALUE.includes(words[sub]) ? 2 : 1;
+  const end = words.includes("--") ? words.indexOf("--") : words.length;
+  return words.some((w, k) => /[*?[{]/.test(w) && glob(k) && (k <= sub || (k < end && (/^[-*?[{]/.test(w) || /\{[^{}]*(,|\.\.)[^{}]*\}/.test(w)))));
+}
 
 // Best-effort check of a shell command before Claude runs it. The git hooks are the authoritative layer.
 export function checkCommand(command, currentBranch, branchAt = () => null) {
@@ -313,30 +357,48 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
   const parsed = parseShell(command);
   // Text given to echo, cat, a heredoc... is data (#61). When anything else could run text, all of it is inspected.
   const text = (parsed && dataOnly(parsed)) ?? command;
-  if (!/\bgit\b/.test(text)) return null;
+  // Text written to a file may be run by a later call: the hook-skipping flags are looked for in it too.
+  const written = (parsed && dataOnly(parsed, fileWriters(parsed))) ?? command;
+  if (!/\bgit\b/.test(written)) return null;
   // git accepts any unambiguous prefix of a long option, so `--no-verif` is `--no-verify`.
-  if (/(^|[\s"'])--no-v/.test(text)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
+  if (/(^|[\s"'])--no-v/.test(written)) return "--no-verify is forbidden: the git hooks enforce the branch policy.";
   // An included config file can set core.hooksPath without naming it here.
-  if (/\binclude\.path\b|\bincludeif\./i.test(text)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
+  if (/\binclude\.path\b|\bincludeif\./i.test(written)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
-  const withoutSetup = text.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
+  const withoutSetup = written.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
+  for (const segment of segmentsOf(written)) {
+    const words = wordsOf(segment);
+    const gitAt = gitIn(words);
+    if (gitAt === -1) continue;
+    const { sub, rest } = parseGit(words.slice(gitAt + 1));
+    if (sub === "commit" && rest.some((w) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))) {
+      return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
+    }
+  }
+  if (!/\bgit\b/.test(text)) return null;
+
+  // The parser knows which words are quoted: an unquoted glob or brace in a git it parsed is not understood.
+  for (const c of parsed?.cmds ?? []) {
+    const a = argv(c.words);
+    if (isGit(a[0]) && expands(a.slice(1).map((w) => w.raw.replace(/["']/g, "")), (k) => a[k + 1].glob)) return GLOB;
+  }
 
   if (isPlainGhCall(command)) return null;
 
   // Dropping quotes splits `-C "$W"p commit` into `-C $W p commit` (subcommand `p`), hiding the commit: refuse the shape.
   if (/\s-C\s+(?:"[^"]*"|'[^']*')[^\s;&|)]/.test(text)) return "git blocked: -C <quoted path> followed by more text in the same word is not understood: write the path as one word, git -C <path> …";
 
-  // Quotes are dropped so `bash -c 'git commit'` is inspected like `git commit`. Only the first git of
-  // each segment is inspected. Redirections are removed first: `2>&1` and `> file` are not refspecs.
-  const segments = text.replace(/["']/g, " ").replace(/\d*>>?(&\d+|\s*[^\s;&|()`]+)/g, " ").split(/[;&|\n()`]+/);
-  const wordsOf = (s) => s.trim().split(/\s+/);
-  // `!git` is how a gh or git alias runs shell.
-  const gitIn = (ws) => ws.findIndex((w) => w === "git" || w === "!git" || w.endsWith("/git"));
+  const segments = segmentsOf(text);
+  const hintable = /(^|[\s;&|])(cd|-C)\s/.test(text);
   // Dirs are trusted only when the parser saw exactly the gits found here, else a git it missed could hide.
   let dirs = parsed && gitDirs(parsed);
-  if (dirs && dirs.length !== segments.filter((s) => gitIn(wordsOf(s)) !== -1).length) dirs = null;
-  const hintable = /(^|[\s;&|])(cd|-C)\s/.test(text);
+  const exact = !!dirs && dirs.length === segments.filter((s) => gitIn(wordsOf(s)) !== -1).length;
+  if (dirs && !exact) {
+    // A git it missed (`!git` in a gh alias, text a non-data command receives) may run in any dir the command moves to.
+    if (hintable) return "git blocked: this command changes directory (cd or -C) and also holds git text the guard cannot place (a `!git` alias, or text a command may run). Run the git on its own: git -C <path> … or cd <path> && git …";
+    dirs = null;
+  }
   let nth = -1;
   for (const segment of segments) {
     const words = wordsOf(segment);
@@ -351,12 +413,11 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
     if (words.slice(0, gitAt).some((w) => /^(HOME|PATH|GIT_DIR|GIT_EXEC_PATH|GIT_CONFIG\w*)=/.test(w))) {
       return "Setting HOME, PATH, GIT_DIR, GIT_EXEC_PATH or GIT_CONFIG* for a git command is forbidden: it changes which hooks and config git uses.";
     }
+    // A git the parser did not see (inside `bash -c '…'`, or no parse at all): its quotes are gone, so every glob counts.
+    if (!exact && expands(words.slice(gitAt + 1))) return GLOB;
     const { sub, rest } = parseGit(words.slice(gitAt + 1));
     const args = [sub, ...rest.filter((w) => !w.startsWith("-"))];
 
-    if (sub === "commit" && rest.some((w) => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))) {
-      return "git commit -n is --no-verify, which is forbidden: the git hooks enforce the branch policy.";
-    }
     if (["commit", "merge", "cherry-pick", "revert", "rebase", "am", "reset"].includes(sub)) {
       for (const branch of branches()) {
         const problem = commitViolation(branch);

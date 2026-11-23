@@ -85,7 +85,8 @@ function runsSetup(words, depth = 0) {
 
 const unquote = (w) => w.replace(/["'\\]/g, "");
 // shortcut: a leading $VAR other than HOME/PWD is assumed to point outside the project (mktemp dirs), upgrade if cherry abuses it.
-const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST|GH_CONFIG_DIR|XDG_CONFIG_HOME)\b/.test(unquote(w));
+// `${VAR:-word}` and the other operator forms are not unknown: commandViolation checks the word they may expand to.
+const unknownVar = (w) => /^\$/.test(unquote(w)) && !/^\$\{?(HOME|PWD|SUBST|GH_CONFIG_DIR|XDG_CONFIG_HOME)\b|^\$\{\w+:?[-=?+]/.test(unquote(w));
 const subst = (w) => /^\$SUBST/.test(unquote(w));
 
 // Heredoc bodies are data, not shell: drop them, but an unquoted one still runs `$(...)` and backticks, so keep those as lines.
@@ -250,8 +251,20 @@ export function commandViolation(command, { project, cwd, env = process.env, rea
   if (MENTIONS_PUBLISH.test(unquote(command)) && !onlyReads) return "Only the human publishes the repo. Ask them to run /skuizops:publish.";
   let here = cwd ?? process.cwd();
   const clean = (word, from = here) => {
+    const u = unquote(word);
+    // `${VAR:-word}`, `${VAR-word}`, `${VAR:=word}`, `${VAR+word}`...: the shell uses VAR's value or the word (or nothing), so each is checked.
+    const op = /^\$\{(\w+)(:?[-=?+])/.exec(u);
+    if (op) {
+      let e = op[0].length;
+      for (let depth = 1; e < u.length && depth; e++) depth += u[e] === "{" ? 1 : u[e] === "}" ? -1 : 0;
+      if (u[e - 1] === "}") {
+        const value = op[1] === "PWD" ? here : env[op[1]];
+        const choices = [...(value ? [value] : []), u.slice(op[0].length, e - 1), ...(op[2].endsWith("+") ? [""] : [])];
+        return choices.flatMap((v) => clean(v + u.slice(e), from));
+      }
+    }
     // readOnly: a word starting with a command substitution is assumed inside the project (fail closed); mktemp is $MKTEMP, outside.
-    const w = unquote(word).replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here).replace(/^\$(?:(GH_CONFIG_DIR|XDG_CONFIG_HOME)|\{(GH_CONFIG_DIR|XDG_CONFIG_HOME)\})(?=\/|$)/, (m, a, b) => env[a ?? b] ?? m);
+    const w = u.replace(/^\$SUBST/, (m) => (readOnly ? project : m)).replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, env.HOME ?? "").replace(/^(\$PWD|\$\{PWD\})(?=\/|$)/, here).replace(/^\$(?:(GH_CONFIG_DIR|XDG_CONFIG_HOME)|\{(GH_CONFIG_DIR|XDG_CONFIG_HOME)\})(?=\/|$)/, (m, a, b) => env[a ?? b] ?? m);
     return /[*?[]/.test(w) ? globSync(w, { cwd: from }).map((m) => resolve(from, m)).concat(resolve(from, w)) : [resolve(from, w)];
   };
   const dirOf = (word, from) => (unknownVar(word) ? resolve("/", unquote(word)) : clean(word, from)[0]);
