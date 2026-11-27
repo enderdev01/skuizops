@@ -69,14 +69,23 @@ When the session start context says a newer skuizops version is available, tell 
 
 ## Leftovers
 
-When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force; show the human the `rm` command for backups.
+When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force (After a merge is the one exception: there the merge is the ask); show the human the `rm` command for backups.
 
 ## Delivery
 
-1. When a change the human asked for is done (cherry PASS, or `verify` for a trivial one), commit, push and open the PR without asking: the PR is the human's review. Follow step 1 of Merge conflicts first. Write PR and issue bodies to a temp file and pass `--body-file`, never `--body "..."`: quoted code in a body trips the edit guard. Stop at the open PR. Do not merge and do not arm auto-merge. A later autopilot would merge only when CI is green on that head and the cherry PASS still matches it (`git patch-id --stable` of `git diff` against the merge-base equals the patch-id on the PASS row). It would then run `gh pr merge <n> --squash` and read back `state`. That autopilot is not this step.
+1. When a change the human asked for is done (cherry PASS, or `verify` for a trivial one), commit, push and open the PR without asking: the PR is the human's review. Follow step 1 of Merge conflicts first. Write PR and issue bodies to a temp file and pass `--body-file`, never `--body "..."`: quoted code in a body trips the edit guard. Stop at the open PR. Do not merge on your own and do not arm auto-merge; merge only when the human asks (Merge on request). A later autopilot would merge only when CI is green on that head and the cherry PASS still matches it (`git patch-id --stable` of `git diff` against the merge-base equals the patch-id on the PASS row). It would then run `gh pr merge <n> --squash` and read back `state`. That autopilot is not this step.
 2. If the diff touches the project's own checks (`scripts/control.mjs`, `scripts/guard/`, `.claude/verification/`, the verify skill, test config), add a "Changes its own checks" line to the PR body so the human reviews them.
 3. Write `Closes #<n>` in the PR body when it resolves a whole issue. When it resolves only some items of an issue's checklist, tick those boxes with `gh issue edit <n> --body-file <file>`.
 4. At the start of each turn, check each PR this session opened and has not seen merged: `gh pr view <n> --json state -q .state`. On `MERGED`, run After a merge without waiting for the human to say it.
+
+## Merge on request
+
+When the human asks you to merge ("merge it", "mergea #12", "merge my changes"), that request is the approval for the merge and for the cleanup after it. Do not ask again.
+
+1. Name the PR: the number the human gave, else the open PR of the current branch (`gh pr view --json number`). Several candidates and none named: ask which.
+2. Read `gh pr view <n> --json state,mergeable,headRefName` and `gh pr checks <n>`. A failing check: report it and stop. `CONFLICTING`: resolve it with Merge conflicts first, then merge.
+3. Merge with the method the repository allows: `gh pr merge <n> --merge` when `gh repo view --json mergeCommitAllowed -q .mergeCommitAllowed` is true, else `--squash`. Do not pass `--delete-branch` and do not use `--admin` or `--auto`. Read back `gh pr view <n> --json state -q .state`; only `MERGED` continues.
+4. Run After a merge.
 
 ## Merge conflicts
 
@@ -95,14 +104,14 @@ Use one worktree per parallel change. Cover its whole life:
 2. Install its dependencies with the project's install command (the one matching its lockfile): a worktree has no `node_modules`.
 3. Give it its own ports, one for every server the dev stack starts (app, API, worker), unused by the main checkout and other worktrees. Start them in the worktree (`npm run <script> -- --port <n>` or the project's flag), check their output for "port in use" errors, and pass the URL to cherry and `--port <n>` to `screenshot`.
 4. Commit and push from it with `git -C <worktree> commit` and `git -C <worktree> push -u origin fix/<name>`. The branch guard judges these by the worktree's branch, even while the session's checkout is on a protected branch. Pass the worktree path as an absolute path, `~/...` or `../...`. If the guard still blocks one, show the human the exact commands to run instead of looking for a way around the guard.
-5. Stop its servers with `TaskStop` when cherry reports. After the PR merges, `git worktree remove <worktree>` and `git branch -d fix/<name>`.
+5. Stop its servers with `TaskStop` when cherry reports. After the PR merges, After a merge removes the worktree and the branch.
 
 ## After a merge
 
-When the human says a PR was merged, or Delivery finds it merged, update the main checkout without being asked:
+When the human says a PR was merged, Delivery finds it merged, or Merge on request merged it, update the main checkout and clean what the merge orphaned without being asked:
 
-1. If `git status --porcelain` shows changes, stop and ask before switching.
-2. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git switch` to it and `git pull --ff-only`.
-3. Remove the merged branch's worktree if it has one, then `git branch -d <branch>`. If `-d` refuses (squash merge), report it; never force-delete.
-4. Look for other leftovers in the checkout: installer backups (`*.local-<timestamp>` under `.githooks` and `scripts/guard`), other merged local branches (`git branch --merged <default>`), merged clean worktrees. List them and ask the human whether to clean them. Only on a yes, run `git worktree remove <path>` and `git branch -d <name>`, never forced. The path guard blocks deleting the backups: show the human the `rm` command instead.
-5. Report the new HEAD in one line (`git log -1 --oneline`).
+1. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git fetch --prune`, `git switch` to it and `git pull --ff-only`. Uncommitted changes that git carries across the switch stay as they are; if `git switch` or the pull refuses, stop and ask.
+2. Merged means: in `git branch --merged origin/<default>`, or its PR is `MERGED` and that PR's `headRefOid` equals the branch tip (`gh pr list --state merged --head <branch> --json headRefOid`). Squash merges only pass the second test.
+3. Delete without asking, never a protected branch, never one with an open PR, never the current branch: each merged clean worktree (`git worktree remove <path>`, never `--force`; one with changes is reported and kept), then each merged local branch (`git branch -d <branch>`; `-D` only when it passed the PR test above), then each remote branch whose PR is `MERGED` and whose `origin/<branch>` tip still equals that PR's `headRefOid` (`git push origin --delete <branch>`). A tip that moved after the merge holds unmerged work: report it and keep it.
+4. Installer backups (`*.local-<timestamp>` under `.githooks` and `scripts/guard`): the path guard blocks deleting them, so show the human the `rm` command.
+5. Report the new HEAD in one line (`git log -1 --oneline`) and what was deleted and kept, one line each.
