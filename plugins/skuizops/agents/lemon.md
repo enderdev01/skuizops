@@ -69,7 +69,7 @@ When the session start context says a newer skuizops version is available, tell 
 
 ## Leftovers
 
-When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force (After a merge is the one exception: there the merge is the ask); show the human the `rm` command for backups.
+When the session start context reports leftovers (installer backups, merged branches, merged clean worktrees), list them to the human and ask before cleaning. Never clean unasked, never force (After a merge is the one exception: a PR the human merged, asked to merge or reported merged is the ask, and only branches with a merged PR at their tip are deleted); show the human the `rm` command for backups.
 
 ## Delivery
 
@@ -83,7 +83,7 @@ When the session start context reports leftovers (installer backups, merged bran
 When the human asks you to merge ("merge it", "mergea #12", "merge my changes"), that request is the approval for the merge and for the cleanup after it. Do not ask again.
 
 1. Name the PR: the number the human gave, else the open PR of the current branch (`gh pr view --json number`). Several candidates and none named: ask which.
-2. Read `gh pr view <n> --json state,mergeable,headRefName` and `gh pr checks <n>`. A failing check: report it and stop. `CONFLICTING`: resolve it with Merge conflicts first, then merge.
+2. Read `gh pr view <n> --json state,mergeable,headRefName` and `gh pr checks <n>`. A failing check: report it and stop. Pending checks: `gh pr checks <n> --watch`. `CONFLICTING`: resolve it with Merge conflicts first, push, and read the checks again on the new head.
 3. Merge with the method the repository allows: `gh pr merge <n> --merge` when `gh repo view --json mergeCommitAllowed -q .mergeCommitAllowed` is true, else `--squash`. Do not pass `--delete-branch` and do not use `--admin` or `--auto`. Read back `gh pr view <n> --json state -q .state`; only `MERGED` continues.
 4. Run After a merge.
 
@@ -110,8 +110,8 @@ Use one worktree per parallel change. Cover its whole life:
 
 When the human says a PR was merged, Delivery finds it merged, or Merge on request merged it, update the main checkout and clean what the merge orphaned without being asked:
 
-1. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git fetch --prune`, `git switch` to it and `git pull --ff-only`. Uncommitted changes that git carries across the switch stay as they are; if `git switch` or the pull refuses, stop and ask.
-2. Merged means: in `git branch --merged origin/<default>`, or its PR is `MERGED` and that PR's `headRefOid` equals the branch tip (`gh pr list --state merged --head <branch> --json headRefOid`). Squash merges only pass the second test.
-3. Delete without asking, never a protected branch, never one with an open PR, never the current branch: each merged clean worktree (`git worktree remove <path>`, never `--force`; one with changes is reported and kept), then each merged local branch (`git branch -d <branch>`; `-D` only when it passed the PR test above), then each remote branch whose PR is `MERGED` and whose `origin/<branch>` tip still equals that PR's `headRefOid` (`git push origin --delete <branch>`). A tip that moved after the merge holds unmerged work: report it and keep it.
+1. Find the default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`), `git fetch --prune`, `git switch` to it and `git pull --ff-only`. Uncommitted changes that git carries across the switch stay as they are; if `git switch` or the pull refuses, stop and ask. When another session is live in this checkout, skip the switch and the pull, and delete only branches and worktrees this session created.
+2. Merged means: the branch has a `MERGED` PR whose `headRefOid` equals the tip you are about to delete (`gh pr list --state merged --head <branch> --json headRefOid`). Being an ancestor of the default branch is not enough: a fresh worktree branch, a long-lived branch, or work pushed after the merge has no merged PR at that tip, so it is kept even when `git branch --merged` lists it.
+3. Delete without asking, never a protected branch, never one with an open PR, never the current branch: each clean worktree of a merged branch (`git worktree remove <path>`, never `--force`; one with changes is reported and kept), then each merged local branch (`git branch -d <branch>`, or `-D` when `-d` refuses after a squash merge), then each merged remote branch, with a lease so a push made after your fetch is never lost: `git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>`. A tip that moved after the merge, or a refused lease, holds unmerged work: report it and keep it.
 4. Installer backups (`*.local-<timestamp>` under `.githooks` and `scripts/guard`): the path guard blocks deleting them, so show the human the `rm` command.
 5. Report the new HEAD in one line (`git log -1 --oneline`) and what was deleted and kept, one line each.

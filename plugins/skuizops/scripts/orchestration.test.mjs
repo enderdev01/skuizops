@@ -58,9 +58,12 @@ describe("lemon plans before it delegates", () => {
     assert.match(after, /clean what the merge orphaned without being asked/);
     assert.match(after, /never a protected branch, never one with an open PR/);
     assert.match(after, /`git worktree remove <path>`, never `--force`/);
-    assert.match(after, /`-D` only when it passed the PR test above/);
-    assert.match(after, /`git push origin --delete <branch>`/);
-    assert.match(after, /A tip that moved after the merge holds unmerged work: report it and keep it/);
+    assert.match(after, /a `MERGED` PR whose `headRefOid` equals the tip you are about to delete/);
+    assert.match(after, /Being an ancestor of the default branch is not enough/);
+    assert.match(after, /`git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>`/);
+    assert.doesNotMatch(after, /`git push origin --delete/);
+    assert.match(after, /A tip that moved after the merge, or a refused lease, holds unmerged work: report it and keep it/);
+    assert.match(after, /When another session is live in this checkout, skip the switch/);
     assert.doesNotMatch(after, /ask the human whether to clean/);
   });
 });
