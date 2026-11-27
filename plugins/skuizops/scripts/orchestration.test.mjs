@@ -44,8 +44,27 @@ describe("lemon plans before it delegates", () => {
     assert.match(lemon, /One cherry is the default/);
     assert.match(lemon, /ISSUES when any FAIL/);
     assert.match(lemon, /BLOCKED when a check is BLOCKED/);
-    assert.match(lemon, /Do not merge and do not arm auto-merge/);
+    assert.match(lemon, /Do not merge on your own and do not arm auto-merge; merge only when the human asks/);
     assert.match(lemon, /gh pr merge <n> --squash/);
+  });
+
+  it("merges only on request and then cleans without asking, never forcing unmerged work", () => {
+    const section = (name) => lemon.split(`## ${name}\n`)[1]?.split("\n## ")[0] ?? "";
+    const merge = section("Merge on request");
+    assert.match(merge, /that request is the approval for the merge and for the cleanup/);
+    assert.match(merge, /A failing check: report it and stop/);
+    assert.match(merge, /Do not pass `--delete-branch` and do not use `--admin` or `--auto`/);
+    const after = section("After a merge");
+    assert.match(after, /clean what the merge orphaned without being asked/);
+    assert.match(after, /never a protected branch, never one with an open PR/);
+    assert.match(after, /`git worktree remove <path>`, never `--force`/);
+    assert.match(after, /a `MERGED` PR whose `headRefOid` equals the tip you are about to delete/);
+    assert.match(after, /Being an ancestor of the default branch is not enough/);
+    assert.match(after, /`git push --force-with-lease=<branch>:<headRefOid> origin --delete <branch>`/);
+    assert.doesNotMatch(after, /`git push origin --delete/);
+    assert.match(after, /A tip that moved after the merge, or a refused lease, holds unmerged work: report it and keep it/);
+    assert.match(after, /When another session is live in this checkout, skip the switch/);
+    assert.doesNotMatch(after, /ask the human whether to clean/);
   });
 });
 
@@ -61,7 +80,7 @@ describe("lemon-mode playbooks", () => {
   it("shipping does not merge", () => {
     const shipping = read("../skills/lemon-mode/playbooks/shipping.md");
     assert.match(shipping, /Do not arm auto-merge/);
-    assert.match(shipping, /Do not run `gh pr merge`/);
+    assert.match(shipping, /Do not run `gh pr merge` on your own: only when the human asks/);
     assert.match(shipping, /CI green/);
     assert.match(shipping, /patch-id/);
   });
