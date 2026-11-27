@@ -139,7 +139,7 @@ async function doctor() {
       : []),
     { name: "git repository", ok: isRepo, fix: "git init" },
     { name: "git hooks", ok: hooksPath.output === ".githooks" && !hookProblem(), fix: hooksPath.output === ".githooks" ? hookProblem() : "git config core.hooksPath .githooks" },
-    { name: "work branch (feat/, fix/, hotfix/)", ok: isRepo && !branchProblem, fix: branchProblem ?? "git init" },
+    { name: "work branch (feat/, fix/, hotfix/)", ok: isRepo && !branchProblem, fix: branchProblem ? `${branchProblem}${/protected branch/.test(branchProblem) ? " (expected right after setup)" : ""}` : "git init" },
   ];
   const ok = checks.every((c) => c.ok);
   const text = checks.map((c) => `${c.ok ? "ok  " : "FAIL"} ${c.name}${c.ok ? "" : `  ->  ${c.fix}`}`).join("\n");
@@ -220,6 +220,7 @@ function changedPaths() {
 }
 
 // Typecheck and lint take JS/TS. Test also takes C# so a Unity script still reaches the test script.
+// Typecheck only uses these to decide whether to run: paths after `--` make tsc ignore tsconfig.json.
 function filesFor(step, files) {
   const code = files.filter((f) => CODE_FILE.test(f));
   if (step === "typecheck" || step === "lint") return code;
@@ -263,7 +264,8 @@ async function verify(lineArgs = []) {
         steps.push({ step, ok: true, ms: 0, output: "", skipped: "no matching paths" });
         continue;
       }
-      steps.push({ step, ...(await runStep("npm", ["run", step, "--silent", "--", ...matched], timeoutMs)) });
+      const args = step === "typecheck" ? [] : ["--", ...matched];
+      steps.push({ step, ...(await runStep("npm", ["run", step, "--silent", ...args], timeoutMs)) });
     } else steps.push({ step, ...(await runStep("npm", ["run", step, "--silent"], timeoutMs)) });
   }
   const ok = steps.every((s) => s.ok);
@@ -282,7 +284,13 @@ const page = (url) => fetch(url, { signal: AbortSignal.timeout(15000) }).then(as
 const isApp = (p) => Boolean(p?.text.includes(APP.expect));
 const got = (p) => (p ? `HTTP ${p.status}` : "no page within 15s");
 
-const PW_HINT = "npm i -D playwright && npx playwright install chromium";
+const PW_HINT = existsSync(join(root, "pnpm-lock.yaml"))
+  ? "pnpm add -D playwright && pnpm exec playwright install chromium"
+  : existsSync(join(root, "yarn.lock"))
+    ? "yarn add -D playwright && yarn playwright install chromium"
+    : existsSync(join(root, "bun.lockb")) || existsSync(join(root, "bun.lock"))
+      ? "bun add -d playwright && bunx playwright install chromium"
+      : "npm i -D playwright && npx playwright install chromium";
 const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
 
 // Directories of the processes listening on `port` (via lsof), or null when it cannot tell.
@@ -341,7 +349,8 @@ async function screenshot(lineArgs) {
   };
   for (const [sig, code] of Object.entries(SIGNALS)) process.on(sig, () => { stop(); process.exit(code); });
   const { port, protocol } = new URL(url);
-  const home = (await answers(url)) ? await page(url) : null;
+  // page(), not answers(): a cold dev server can take longer than answers' 2s; a closed port still fails fast.
+  const home = await page(url);
   if (home && !isApp(home)) {
     fail("port taken", `${url} answers (${got(home)}) but its page does not contain APP.expect ("${APP.expect}"): another app holds the port, or the app is failing  ->  check what listens (lsof -nP -iTCP:${port || (protocol === "https:" ? 443 : 80)} -sTCP:LISTEN), stop it if it is not this app, then retry`);
   }

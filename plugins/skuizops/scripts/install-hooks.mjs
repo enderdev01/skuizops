@@ -91,10 +91,29 @@ export function installHooks(dir, env = process.env) {
   return { root, actions, backups };
 }
 
+// One-line hint to commit the setup files that git shows as untracked or modified; "" when none, or not a git repo.
+export function commitHint(root, paths) {
+  try {
+    const shown = git(root, "status", "--porcelain", "--", ...paths)
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => l.slice(3).replace(/^"|"$/g, ""));
+    if (!shown.length) return "";
+    const branch = git(root, "branch", "--show-current");
+    const start = /^(feat|fix|hotfix)\//.test(branch) ? "" : "git switch -c feat/skuizops-setup && ";
+    return `Commit the setup on a work branch: ${start}git add ${shown.join(" ")} && git commit -m "chore: add skuizops setup"`;
+  } catch {
+    return "";
+  }
+}
+
+export const HOOK_PATHS = [".githooks", "scripts/guard"];
+
 if (isMain(import.meta.url)) {
   try {
     const { root, actions } = installHooks(process.argv[2] || process.cwd());
-    process.stdout.write(`${actions.join("\n")}\nHooks installed in: ${root}\n`);
+    const hint = commitHint(root, HOOK_PATHS);
+    process.stdout.write(`${actions.join("\n")}\nHooks installed in: ${root}\n${hint ? `${hint}\n` : ""}`);
   } catch (error) {
     process.stderr.write(`skuizops: ${error.message}\n`);
     process.exit(1);

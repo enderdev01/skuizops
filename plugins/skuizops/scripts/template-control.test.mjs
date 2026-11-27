@@ -79,6 +79,32 @@ describe("doctor: git hooks", () => {
   });
 });
 
+describe("doctor: work branch", () => {
+  it("fails on a protected branch and says it is expected after setup, with the switch command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "control-branch-"));
+    mkdirSync(join(dir, "scripts"));
+    copyFileSync(template, join(dir, "scripts", "control.mjs"));
+    mkdirSync(join(dir, "scripts", "guard"));
+    for (const f of ["branch-guard.mjs", "scope.mjs"]) copyFileSync(new URL(f, import.meta.url), join(dir, "scripts", "guard", f));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    const r = spawnSync("node", ["scripts/control.mjs", "doctor", "--json"], { cwd: dir, encoding: "utf8" });
+    const check = JSON.parse(r.stdout).checks.find((c) => c.name.startsWith("work branch"));
+    assert.equal(check.ok, false);
+    assert.match(check.fix, /"main" is a protected branch.*git switch -c feat\/<name> \(expected right after setup\)$/);
+  });
+
+  it("does not call a missing guard expected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "control-branch-"));
+    mkdirSync(join(dir, "scripts"));
+    copyFileSync(template, join(dir, "scripts", "control.mjs"));
+    spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    const r = spawnSync("node", ["scripts/control.mjs", "doctor", "--json"], { cwd: dir, encoding: "utf8" });
+    const check = JSON.parse(r.stdout).checks.find((c) => c.name.startsWith("work branch"));
+    assert.match(check.fix, /branch-guard\.mjs is missing/);
+    assert.doesNotMatch(check.fix, /expected right after setup/);
+  });
+});
+
 // Copies the template into a temp project, optionally patching its APP line and stubbing the project's Playwright.
 function shotProject(app, { pw = false, dir = mkdtempSync(join(tmpdir(), "control-shot-")) } = {}) {
   mkdirSync(join(dir, "scripts"));
@@ -160,6 +186,24 @@ describe("screenshot", { concurrency: true }, () => {
     const r = await shotAgainst((_, res) => { res.write("<title>"); setTimeout(() => res.end("MYAPP</title>"), 2500); });
     assert.equal(r.status, 0);
   });
+  it("does not start a second server when the running one answers slower than 2s", async () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "control-marker-")), "started");
+    const r = await shotAgainst((_, res) => setTimeout(() => res.end("<title>MYAPP</title>"), 3000), { start: ["node", "-e", `require('fs').writeFileSync(${JSON.stringify(marker)}, '')`] });
+    assert.equal(r.status, 0);
+    assert.equal(existsSync(marker), false);
+  });
+  for (const [lock, hint] of [
+    ["pnpm-lock.yaml", /pnpm add -D playwright && pnpm exec playwright install chromium/],
+    ["yarn.lock", /yarn add -D playwright && yarn playwright install chromium/],
+    ["bun.lock", /bun add -d playwright && bunx playwright install chromium/],
+  ]) {
+    it(`picks the Playwright install hint from ${lock}`, () => {
+      const dir = shotProject({ start: null, url: "http://127.0.0.1:1" }, { pw: false });
+      writeFileSync(join(dir, lock), "");
+      const r = spawnSync("node", ["scripts/control.mjs", "screenshot", "/", "--json"], { cwd: dir, encoding: "utf8" });
+      assert.match(JSON.parse(r.stdout).fix, hint);
+    });
+  }
   it("names the HTTP status when the page lacks APP.expect", async () => {
     const r = await shotAgainst((_, res) => { res.statusCode = 500; res.end("boom"); });
     assert.equal(r.out.error, "port taken");
@@ -368,7 +412,9 @@ describe("verify --changed and the recorded tree", () => {
     assert.equal(existsSync(join(dir, ".git", "skuizops-verified")), false);
     const code = run("--changed", "src/app.ts");
     assert.equal(code.status, 0, code.stdout);
-    assert.match(ran(), /typecheck src\/app\.ts/);
+    // tsc ignores tsconfig.json when given files, so typecheck runs the whole project: no path args.
+    assert.match(ran(), /^typecheck$/m);
+    assert.doesNotMatch(ran(), /typecheck src/);
     assert.match(ran(), /lint src\/app\.ts/);
     assert.match(ran(), /test src\/app\.ts/);
     const cs = run("--changed", "Assets/Player.cs");

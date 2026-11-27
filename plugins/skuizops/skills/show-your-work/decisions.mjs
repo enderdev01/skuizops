@@ -25,7 +25,7 @@ export function ensureGitignore(root) {
   const file = join(root, ".gitignore");
   const line = ".skuizops/";
   const text = existsSync(file) ? readFileSync(file, "utf8") : "";
-  if (text.split("\n").some((entry) => entry.trim() === line)) return false;
+  if (text.split("\n").some((entry) => [".skuizops/", "/.skuizops/", ".skuizops", "/.skuizops"].includes(entry.trim()))) return false;
   const sep = text.length && !text.endsWith("\n") ? "\n" : "";
   writeFileSync(file, `${text}${sep}${line}\n`);
   return true;

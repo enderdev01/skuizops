@@ -9,7 +9,7 @@ import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
 import { setupCodex } from "./codex.mjs";
 import { check, format } from "../plugins/skuizops/scripts/check.mjs";
-import { installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
+import { commitHint, HOOK_PATHS, installHooks } from "../plugins/skuizops/scripts/install-hooks.mjs";
 import { isMain, isTrusted, real } from "../plugins/skuizops/scripts/scope.mjs";
 import { trust } from "../plugins/skuizops/scripts/trust.mjs";
 
@@ -417,6 +417,8 @@ async function main() {
     process.exit(1);
   }
   out(green("All set"));
+  const hint = root && commitHint(root, [".claude/settings.json", ".claude/output-styles", ...HOOK_PATHS]);
+  if (hint) out(dim(hint));
 
   if (process.env.CLAUDECODE) {
     out("Exit Claude and run `claude --continue` to load the update.");

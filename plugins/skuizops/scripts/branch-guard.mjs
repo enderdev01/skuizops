@@ -578,7 +578,10 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
   // An included config file can set core.hooksPath without naming it here.
   if (/\binclude\.path\b|\bincludeif\./i.test(all)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
-  const withoutSetup = all.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
+  // A bare read (`git config [--get|--local|--global|--system|--worktree|--show-origin|--show-scope] core.hooksPath`) ends at the command end or a separator; any value or other flag keeps it blocked.
+  const withoutSetup = all
+    .replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "")
+    .replace(/\bgit\s+config\s+(?:--(?:get|local|global|system|worktree|show-origin|show-scope)\s+)*core\.hooksPath(?=[ \t]*(?:$|[;&|\n]))/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
   for (const s of [written, ...contents.map((c) => c.text)]) {
     for (const { ws, at } of gitCalls(s)) {

@@ -43,6 +43,32 @@ describe("checkCommand", () => {
     assert.equal(checkCommand("git config core.hooksPath .githooks", onFeat), null);
     assert.equal(checkCommand("git config --local core.hooksPath .githooks", onFeat), null);
   });
+  it("allows reading core.hooksPath", () => {
+    for (const c of ["git config core.hooksPath", "git config --get core.hooksPath", "git config --local --get core.hooksPath", "git config --global core.hooksPath", "git config --show-origin --get core.hooksPath", "git config core.hooksPath && git status", "git config core.hooksPath | cat", "git config core.hooksPath\ngit status"]) {
+      assert.equal(checkCommand(c, onFeat), null, c);
+    }
+  });
+  it("blocks writing core.hooksPath", () => {
+    for (const c of ["git config core.hooksPath x", "git config --global core.hooksPath x", "git config --unset core.hooksPath", "git config --replace-all core.hooksPath x", "git config --add core.hooksPath x", "git config core.hooksPath; git config core.hooksPath x", "git config core.hooksPath x # --get"]) {
+      assert.match(checkCommand(c, onFeat), /hooksPath/, c);
+    }
+  });
+  it("blocks hooksPath writes disguised next to the read exemption", () => {
+    const writes = [
+      "git config core.hooksPath\tx", "git config core.hooksPath \\\nx", "git config core.hooksPath\\\nx", "git config core.hooksPath\r\nx",
+      "git config core.hooksPath x", "git config core.hooksPath\vx", "git config core.hooksPath\fx",
+      'git config "core.hooksPath" x', "git config 'core.hooksPath' x", "git config core.hookspath x", "git config CORE.HOOKSPATH x",
+      "git config --file .git/config core.hooksPath x", "git config --file=.git/config core.hooksPath x", "git config --type=path core.hooksPath x",
+      "git config --type path core.hooksPath x", "git config core.hooksPath=x", "git config --get core.hooksPath x", "git config --worktree core.hooksPath x",
+      "git config --system core.hooksPath x", "git config --show-origin core.hooksPath x", "git config --unset-all core.hooksPath", "git config --get --unset core.hooksPath",
+      "git config set core.hooksPath x", "git config unset core.hooksPath",
+      "git config core.hooksPath $(echo x)", 'git config core.hooksPath "$(echo x)"', "git config core.hooksPath <<< x", "(git config core.hooksPath x)",
+      "echo x | xargs git config core.hooksPath", "env git config core.hooksPath x", "timeout 5 git config core.hooksPath x",
+      "sh -c 'git config core.hooksPath \"$0\"' x", "f() { git config core.hooksPath \"$1\"; }; f x", "git config alias.hp '!git config core.hooksPath'",
+      "git config core.hooksPath & git config core.hooksPath x", "git config core.hooksPath\ngit config core.hooksPath x",
+    ];
+    for (const c of writes) assert.notEqual(checkCommand(c, onFeat), null, JSON.stringify(c));
+  });
   it("blocks git -c core.hooksPath=x commit", () => assert.match(checkCommand("git -c core.hooksPath=x commit -m y", onFeat), /hooksPath/));
   it("allows push of feat/", () => assert.equal(checkCommand("git push -u origin feat/login", onFeat), null));
   it("blocks push to protected refspec", () => assert.match(checkCommand("git push origin feat/login:main", onFeat), /protected/));

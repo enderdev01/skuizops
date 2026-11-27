@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendDecision, cell, ensureGitignore } from "../skills/show-your-work/decisions.mjs";
@@ -34,6 +34,16 @@ describe("decision log append", () => {
     assert.equal(lines.length, 3);
     assert.match(lines[1], /^20\d\d-\d\d-\d\dT.*\tpredicate\tnpm test exits 0\t\.skuizops\/plan\.md\topen$/);
     assert.match(lines[2], /\tcherry\tre-checked the repro\tsha abc patch-id def\tpass$/);
+  });
+
+  it("leaves .gitignore untouched when .skuizops is already ignored in another form", () => {
+    for (const form of ["/.skuizops/", ".skuizops", "/.skuizops", ".skuizops/"]) {
+      const dir = mkdtempSync(join(tmpdir(), "decisions-"));
+      const text = `node_modules\n  ${form}  \n`;
+      writeFileSync(join(dir, ".gitignore"), text);
+      assert.equal(ensureGitignore(dir), false, form);
+      assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), text, form);
+    }
   });
 
   it("refuses a row with an empty cell", () => {
