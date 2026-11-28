@@ -7,7 +7,7 @@
 //   node branch-guard.mjs pre-commit   git pre-commit / pre-merge-commit hook
 //   node branch-guard.mjs pre-push     git pre-push hook, reads "<local ref> <sha> <remote ref> <sha>" lines
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, normalize } from "node:path";
 import { inScope, isMain, projectDir } from "./scope.mjs";
@@ -443,6 +443,23 @@ function writerContents(p, writers) {
 // Commands that cannot change the shell's directory, besides the inert ones.
 const STAYS = new Set(["[", "[[", "test", ":", "export", "sleep"]);
 
+// Builtins, keywords and precommand modifiers of bash and zsh (zsh `${(k)builtins} ${(k)reswords}`, bash `compgen -b -k`,
+// plus bash 4+ and common zsh modules): they run in the shell itself, so a file of the same name on PATH does not stop them.
+// `chdir` and the `-` modifier (`- cd /x`) change directory in zsh.
+const BUILTINS = new Set(("- : ! . [ [[ ]] { } alias autoload bg bind bindkey break builtin bye caller case cd chdir command compadd comparguments compcall compctl compdescribe compfiles compgen complete compopt compgroups compquote compset comptags comptry compvalues continue coproc declare dirs disable disown do done echo echotc echoti elif else emulate enable end esac eval exec exit export false fc fg fi float for foreach function functions getln getopts hash help history if in integer jobs kill let limit local log logout mapfile nocorrect noglob popd print printf private pushd pushln pwd r read readarray readonly rehash repeat return sched select set setopt shift shopt source suspend test then time times trap true ttyctl type typeset ulimit umask unalias unfunction unhash unlimit unset unsetopt until vared wait whence where which while zcompile zformat zle zmodload zparseopts zregexparse zstyle").split(" "));
+// Text that can rebind a name (a function, alias, hash entry) or change PATH: the whole command then falls back to UNKNOWN.
+const REBINDS = /\b(alias|unalias|function|functions|unfunction|autoload|hash|enable|typeset|declare)\b|\(\s*\)|\bPATH\b|\bpath\b\s*[+=(]/;
+const isExec = (f) => { try { return statSync(f).isFile() && (accessSync(f, constants.X_OK), true); } catch { return false; } };
+// An external program runs in a child process and cannot change the shell's directory: a plain name found as an executable
+// file in PATH, or an absolute path to one. `./x` and `a/b` depend on the tracked directory and stay unresolved.
+// shortcut: PATH is read as the guard sees it, not as the shell does, upgrade if an agent abuses a rc-file PATH.
+function externalProgram(w, cache) {
+  const n = w.raw;
+  if (w.quoted || /[$\\`*?[{}~"'()<>]/.test(n) || BUILTINS.has(n) || WRAPPERS.has(n) || SHELLS.has(n)) return false;
+  if (!cache.has(n)) cache.set(n, n.startsWith("/") ? isExec(n) : !n.includes("/") && (process.env.PATH ?? "").split(":").some((d) => d && isExec(`${d}/${n}`)));
+  return cache.get(n);
+}
+
 // Directories each git of the command may run in, in order (null = the session cwd, UNKNOWN = not resolved), and the
 // variables resolved to one literal path; null when the pipes are not understood.
 function gitDirs(p) {
@@ -489,6 +506,8 @@ function gitDirs(p) {
   let ok = [null], fail = [null];
   const union = (...sets) => [...new Set(sets.flat())];
   const out = [];
+  const found = new Map();
+  const external = !REBINDS.test(p.src);
   p.cmds.forEach((c, n) => {
     const cwd = c.sep === "&&" ? ok : c.sep === "||" ? fail : union(ok, fail);
     let moved = cwd, failed = cwd; // where the command leaves the shell when it succeeds / fails
@@ -502,7 +521,7 @@ function gitDirs(p) {
       if (a[k]?.raw === "--") k++;
       const d = a.length === k + 1 ? pathOf(a[k], true) : null; // no operand, `-`, two operands (zsh): not resolved
       moved = d === null ? [UNKNOWN] : under(cwd, d).map((x) => (x === UNKNOWN ? x : normalize(x)));
-    } else if (kind(c) === "other" && !STAYS.has(a[0].raw)) moved = failed = [UNKNOWN]; // a function, alias, pushd, eval, zsh autocd…
+    } else if (kind(c) === "other" && !STAYS.has(a[0].raw) && !(external && externalProgram(a[0], found))) moved = failed = [UNKNOWN]; // a function, alias, pushd, eval, zsh autocd… (a program found in PATH stays)
     ok = union(c.sep === "||" ? ok : [], moved);
     fail = union(c.sep === "&&" ? fail : [], failed);
   });
@@ -578,7 +597,10 @@ export function checkCommand(command, currentBranch, branchAt = () => null) {
   // An included config file can set core.hooksPath without naming it here.
   if (/\binclude\.path\b|\bincludeif\./i.test(all)) return "Changing git config includes is forbidden: an included file could disable the git hooks.";
   // The one allowed form is the setup step: `git config [--local] core.hooksPath .githooks`.
-  const withoutSetup = all.replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "");
+  // A bare read (`git config [--get|--local|--global|--system|--worktree|--show-origin|--show-scope] core.hooksPath`) ends at the command end or a separator; any value or other flag keeps it blocked.
+  const withoutSetup = all
+    .replace(/\bgit\s+config\s+(--local\s+)?core\.hooksPath\s+\.githooks(?![^\s;&|])/gi, "")
+    .replace(/\bgit\s+config\s+(?:--(?:get|local|global|system|worktree|show-origin|show-scope)\s+)*core\.hooksPath(?=[ \t]*(?:$|[;&|\n]))/gi, "");
   if (/core\.hooksPath/i.test(withoutSetup)) return "Changing core.hooksPath is forbidden: it would disable the branch policy.";
   for (const s of [written, ...contents.map((c) => c.text)]) {
     for (const { ws, at } of gitCalls(s)) {

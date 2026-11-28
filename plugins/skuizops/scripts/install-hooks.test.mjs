@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandViolation } from "./path-guard.mjs";
-import { installHooks } from "./install-hooks.mjs";
+import { commitHint, HOOK_PATHS, installHooks } from "./install-hooks.mjs";
 
 const scripts = fileURLToPath(new URL(".", import.meta.url));
 const script = join(scripts, "install-hooks.mjs");
@@ -126,6 +126,23 @@ describe("install-hooks.mjs entry point", () => {
     const r = spawnSync("node", [script, dir], { encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(r.stdout.includes(`Hooks installed in: ${dir}`));
+  });
+
+  it("hints to commit the untracked setup on a work branch, and stays quiet once committed", () => {
+    const dir = repo();
+    const r = spawnSync("node", [script, dir], { encoding: "utf8" });
+    assert.ok(r.stdout.includes("git switch -c feat/skuizops-setup"), r.stdout);
+    assert.ok(r.stdout.includes(".githooks"));
+    execFileSync("git", ["-C", dir, "add", ".githooks", "scripts/guard"]);
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--no-verify", "-m", "setup"]);
+    assert.ok(!spawnSync("node", [script, dir], { encoding: "utf8" }).stdout.includes("Commit the setup"));
+  });
+
+  it("drops the branch switch on a feat/ branch", () => {
+    const dir = repo();
+    execFileSync("git", ["-C", dir, "switch", "-q", "-c", "feat/x"]);
+    const hint = commitHint(installHooks(dir).root, HOOK_PATHS);
+    assert.ok(hint.includes("git add .githooks") && !hint.includes("git switch"), hint);
   });
 
   it("exits non-zero with a message outside a git repository", () => {
