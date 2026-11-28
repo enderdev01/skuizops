@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
-import { normalize } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, normalize } from "node:path";
 import { checkCommand, commitViolation, isPlainGhCall, isProtected, pushViolation } from "./branch-guard.mjs";
 
 describe("isProtected", () => {
@@ -515,7 +517,8 @@ describe("PR #76 review round 4: fail closed when the parser cannot resolve a co
   blocked("cd && git commit -m x", "feat/a", dir);
   blocked("cd /abs/wt /abs/repo && git commit -m x", "feat/a", dir);
   blocked("pushd /abs/repo && git commit -m x", "feat/a", dir);
-  blocked("npm test && git commit -m x", "feat/a", dir);
+  // A program found in PATH keeps the directory (issue 80 block below); a name not in PATH may be a function.
+  blocked("not-on-path-tool test && git commit -m x", "feat/a", dir);
   blocked("z repo && git push -u origin HEAD", "feat/a", dir);
   blocked("cd /abs/wt && popd && git commit -m x", "feat/a", dir);
   blocked("bash -c 'git commit -m x'", "feat/a", dir);
@@ -713,5 +716,58 @@ describe("PR #76 review: what the guard allows never commits in a protected dir 
     rmSync(log, { force: true });
     spawnSync("/bin/sh", ["-c", corpus[0]], { cwd: session, env: { PATH: `${bin}:/usr/bin:/bin`, GIT_LOG: log } });
     assert.match(readFileSync(log, "utf8"), new RegExp(`^${repo} commit`));
+  });
+});
+
+describe("issue 80: a program found in PATH does not move the shell", () => {
+  const at = (d) => ({ "/abs/wt": "feat/x", "../wt": "feat/x", "../repo": "main" })[d] ?? null;
+  const run = (cmd, branch) => {
+    const saved = process.env.PATH;
+    process.env.PATH = `${dirname(process.execPath)}:${saved}`; // `node` must resolve whatever the runner's PATH
+    try { return checkCommand(cmd, branch, at); } finally { process.env.PATH = saved; }
+  };
+  const allowed = (cmd, branch) => it(`allows ${JSON.stringify(cmd)} on ${branch}`, () => assert.equal(run(cmd, branch), null));
+  const unknown = (cmd) => it(`cannot tell for ${JSON.stringify(cmd)}`, () => assert.match(run(cmd, "feat/a") ?? "allowed", /cannot tell which repository/));
+  allowed("node x.mjs && git commit -m x", "feat/a");
+  it("still blocks node x.mjs && git commit on a protected branch as protected", () => {
+    const r = run("node x.mjs && git commit -m x", "main");
+    assert.match(r, /protected/);
+    assert.doesNotMatch(r, /cannot tell/);
+  });
+  allowed("cd /abs/wt && node x.mjs && git merge origin/develop", "main");
+  allowed("node x.mjs; git -C ../wt commit -m x", "main");
+  it("resolves node x.mjs; git -C ../repo to ../repo", () => assert.match(run("node x.mjs; git -C ../repo commit -m x", "feat/a"), /protected/));
+  allowed("FOO=1 node x.mjs && git commit -m x", "feat/a");
+  for (const cmd of [
+    "z foo && git commit -m x",
+    "node(){ cd /x; }; node && git commit -m x",
+    "function node { cd /x; }; node; git commit -m x",
+    "alias node='cd /x'; node; git commit -m x",
+    "PATH=/tmp node x && git commit -m x",
+    "export PATH=/tmp; node x; git commit -m x",
+    "pushd /x; git commit -m x",
+    "cd -; git commit -m x",
+    "fc -s; git commit -m x",
+    "hash -p /bin/sh node; node; git commit -m x",
+    "./script.sh && git commit -m x",
+    "node_modules/.bin/x && git commit -m x",
+    "/tmp && git commit -m x",
+    '"node" x && git commit -m x',
+  ]) unknown(cmd);
+  it("blocks a variable program", () => assert.match(run("$N x && git commit -m x", "feat/a") ?? "allowed", /blocked/)); // the program check fires first
+  it("cannot tell for a builtin even when an executable of that name is in PATH", () => {
+    // An agent can plant /some/bin/chdir in an earlier call; zsh still runs its builtin, which changes directory.
+    // Every builtin and keyword the installed shells report, so a new shell version cannot add a gap unnoticed.
+    const ask = (sh, script) => (spawnSync(sh, ["-c", script], { encoding: "utf8" }).stdout ?? "").split(/\s+/).filter(Boolean);
+    const shells = [...ask("zsh", "emulate zsh; print -l ${(k)builtins} ${(k)reswords}"), ...ask("bash", "compgen -b; compgen -k")];
+    const names = [...new Set(["chdir", "-", "cd", "pushd", "popd", "source", "eval", "exec", "trap", "setopt", "emulate", "builtin", "command", "fc", "r", ...shells])].filter((n) => ![".", "[", "[[", "test", ":", "export", "echo", "printf", "pwd", "true", "false"].includes(n)); // `.` is a directory; the rest are STAYS or INERT by design
+    const bin = mkdtempSync(join(tmpdir(), "guard-bin-"));
+    for (const n of names) writeFileSync(join(bin, n), "#!/bin/sh\n", { mode: 0o755 });
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}:${saved}`;
+    try {
+      for (const n of names) assert.match(checkCommand(`${n} /x && git commit -m x`, "feat/a", at) ?? "allowed", /cannot tell which repository|blocked/, `builtin ${JSON.stringify(n)} kept the directory`);
+      assert.match(checkCommand("- cd /x && git commit -m x", "feat/a", at) ?? "allowed", /cannot tell which repository/);
+    } finally { process.env.PATH = saved; }
   });
 });
